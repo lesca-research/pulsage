@@ -1,0 +1,45 @@
+"""
+Check backward compatibility.
+
+Parse all matlab functions used in all .m file in the given directory (recursive) and query matlab website to know
+when the function was issued. 
+"""
+import re
+import requests
+
+func_re = re.compile('.*?([a-zA-Z]\w+)\([^)]*\)[^.,].*?')
+release_in_re = re.compile('Introduced in (\w+) *<')
+release_before_re = re.compile('Introduced in (\w+) *<') #TODO
+matlab_doc_url_pat = 'https://www.mathworks.com/help/matlab/ref/%s.html'
+
+def get_matlab_func_release(func_name, searched):
+    searched.add(func_name)
+    print 'Checking doc of %s ...' % func_name
+    resp = requests.get(matlab_doc_url_pat % func_name)
+    if resp.ok:
+        rr = release_in_re.search(resp.text)
+        if rr is not None:
+            return rr.group(1)
+        else:
+            return 'rdate not found in doc'
+    else:
+        return 'Func doc not found' 
+        
+from glob import glob
+rdates = {}
+searched = set()
+for mat_fn in glob('../**/*.m'):
+    print 'parsing %s...' % mat_fn
+    with open(mat_fn) as fmat:
+        func_names = func_re.findall(fmat.read())
+        rdates.update(dict((f,get_matlab_func_release(f,searched))
+                           for f in func_names
+                           if f not in searched))
+
+from pprint import pprint
+pprint(rdates)
+
+print 'All rdates:'
+print sorted([d for d in set(rdates.values())
+              if d.startswith('R')])
+
