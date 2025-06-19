@@ -491,8 +491,6 @@ for iacq=1:length(acq_defs)
                                                     'avgwinoverlap', 50, ...
                                                     'scalarprod',    0, ...
                                                     'outputmode',    'input');  % separately for each file
-            %TODO compute pulsatility  index average while excluding bad segments
-            %TODO store and then save to table at the end
        
 
             %a.z version 3: 
