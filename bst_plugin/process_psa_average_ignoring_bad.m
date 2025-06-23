@@ -1,4 +1,4 @@
- function varargout = process_psa_pulsatility( varargin )
+function varargout = process_psa_average_ignoring_bad( varargin )
 
 % @=============================================================================
 % This software is part of the Brainstorm software:
@@ -18,7 +18,7 @@
 % For more information type "brainstorm license" at command prompt.
 % =============================================================================@
 %
-% Authors: Thomas Vincent (2024-)
+% Authors: Aymen Zire (2025-)
 
 eval(macro_method);
 end
@@ -27,15 +27,13 @@ end
 %% ===== GET DESCRIPTION =====
 function sProcess = GetDescription() %#ok<DEFNU>
 % Description the process
-%TOCHECK: how do we limit the input file types (only NIRS data)?
-sProcess.Comment     = 'Moving average';
-sProcess.FileTag     = 'pulsatility'; %movmean
+sProcess.Comment     = 'Real average pulsatility';
+sProcess.FileTag     = 'Average (no bad)';
 sProcess.Category    = 'File';
-sProcess.SubGroup    = 'Pre-process';
+sProcess.SubGroup    = 'Average';
 sProcess.Index       = 1305; %0: not shown, >0: defines place in the list of processes
 sProcess.Description = '';
-sProcess.isSeparator = 0; % add a horizontal bar after the process in
-%                             the list
+sProcess.isSeparator = 0; % add a horizontal bar after the process in the list
 % Definition of the input accepted by this process
 sProcess.InputTypes  = {'data', 'raw'};
 sProcess.OutputTypes = {'data', 'data'};
@@ -43,13 +41,13 @@ sProcess.nInputs     = 1;
 sProcess.nMinFiles   = 1;
 % Definition of the options
 
-sProcess.options.channelnames.Comment = 'Channel names (Coma-separated values):';
-sProcess.options.channelnames.Type    = 'text';
-sProcess.options.channelnames.Value   = '';
+sProcess.options.option_channels.Comment = 'Channels (comma-separated types or names): ';
+sProcess.options.option_channels.Type    = 'text';
+sProcess.options.option_channels.Value   = '';
 
-sProcess.options.heart_beat_event.Comment = 'Heart beat event';
-sProcess.options.heart_beat_event.Type    = 'text';
-sProcess.options.heart_beat_event.Value   = 'cardiac';
+sProcess.options.option_win_size.Comment = 'Window size';
+sProcess.options.option_win_size.Type    = 'value';
+sProcess.options.option_win_size.Value   = {20, 'sec', 2};
 end
 
 %% ===== FORMAT COMMENT =====
@@ -66,6 +64,28 @@ for iInput=1:length(sInputs)
     if strcmp(sInputs(iInput).FileType, 'data')     % Imported data structure
         sDataIn = in_bst_data(sInputs(iInput).FileName);
         events = sDataIn.Events;
+        % v.1 added
+         % masque des bons échantillons 
+        sfreq = 1 / diff(sDataIn.Time(1:2));
+    nTimes = length(sDataIn.Time);
+    good_mask = true(1, nTimes);
+
+    % Liste des labels d'événements à considérer comme "bad"
+    bad_event_labels = {'bad', 'bad_segments','BAD','Bad};
+
+    % Appliquer le masque pour chaque événement "bad"
+    for iEvt = 1:length(events)
+        if any(strcmpi(events(iEvt).label, bad_event_labels))
+            for iSeg = 1:size(events(iEvt).times, 2)
+                iStart = max(1, round((events(iEvt).times(1, iSeg) - sDataIn.Time(1)) * sfreq) + 1);
+                iEnd   = min(nTimes, round((events(iEvt).times(2, iSeg) - sDataIn.Time(1)) * sfreq));
+                good_mask(iStart:iEnd) = false;
+            end
+        end
+    end
+    
+    
+    
     elseif strcmp(sInputs(iInput).FileType, 'raw')  % Continuous data file
         sDataIn = in_bst(sInputs(iInput).FileName, [], 1, 1, 'no');
         sDataRaw = in_bst_data(sInputs(iInput).FileName, 'F');
@@ -73,8 +93,8 @@ for iInput=1:length(sInputs)
     end
     channels = in_bst_channel(sInputs(iInput).ChannelFile);
     nb_channels = size(channels.Channel, 2);
-    if ~isempty(sProcess.options.channelnames.Value)
-        idx_chans = channel_find(channels.Channel, sProcess.options.channelnames.Value);
+    if ~isempty(sProcess.options.option_channels.Value)
+        idx_chans = channel_find(channels.Channel, sProcess.options.option_channels.Value);
         chan_mask = false(1, nb_channels);
         chan_mask(idx_chans) = 1;
     else
@@ -82,32 +102,21 @@ for iInput=1:length(sInputs)
     end
 
     signal = sDataIn.F(chan_mask, :)';
+    win_size = round(sProcess.options.option_win_size.Value{1} / diff(sDataIn.Time(1:2)));
     
-    ievent = strcmp(sProcess.options.heart_beat_event.Value, ...
-                    {events.label});
-    %Ittération sur les channels | OLD_version{[pulsatility, pulsatility_time] = apply_on_epochs(signal, sDataIn.Time, events(ievent).times(1,:),@pulsatility); puslatility_full = interp1(time, epoch_signal, sDataIn.Time);}
-    nb_selected_chans = sum(chan_mask);
-    pulsatility = zeros(length(events(ievent).times(1,:)) - 1, nb_selected_chans);
-    chan_indices = find(chan_mask);
-    for iChan = 1:nb_selected_chans
-        sig_chan = sDataIn.F(chan_indices(iChan), :)';  % signal 1D pour le canal i
-        [puls_chan, pulsatility_time] = apply_on_epochs(sig_chan, sDataIn.Time,...
-                                                        events(ievent).times(1,:),...
-                                                        @pulsatility);
-        pulsatility(:, iChan) = puls_chan;
-    end
-
-
-    iSamples = round(pulsatility_time / diff(sDataIn.Time(1:2)));
-    signal_full = sDataIn.F(:, iSamples);
-    signal_full(chan_mask, :) = pulsatility';
+    % moyenne glissante ignorant les "bad" OLD signal_mavg = movmean(signal, win_size);
+    signal(~good_mask, :) = NaN;
+    signal_mavg = movmean(signal, win_size, 'omitnan');
+    
+    signal_full = sDataIn.F;
+    signal_full(chan_mask, :) = signal_mavg';
 
     % Save time-series data
     sDataOut = db_template('data');
     sDataOut.F            = signal_full;
-    sDataOut.Comment      = [sDataIn.Comment ' | Pulsatility'];
+    sDataOut.Comment      = 'Window-averaged';
     sDataOut.ChannelFlag  = sDataIn.ChannelFlag;
-    sDataOut.Time         = pulsatility_time;
+    sDataOut.Time         = sDataIn.Time;
     sDataOut.History      = sDataIn.History;
     sDataOut.DataType     = 'recordings';
     sDataOut.nAvg         = 1;
@@ -126,24 +135,4 @@ end
 end
 
 
-function [values, times] = apply_on_epochs(signal, signal_time, epoch_times, func)
 
-sampling_freq = 1 ./ diff(signal_time(1:2));
-epoch_samples = round(epoch_times .* sampling_freq);
-values = zeros(length(epoch_samples)-1, size(signal,2));
-times = zeros(1, length(epoch_samples)-1);
-for iepoch=1:(length(epoch_samples)-1)
-    [value, time] = func(signal(epoch_samples(iepoch):epoch_samples(iepoch+1), :), ...
-                         signal_time(epoch_samples(iepoch):epoch_samples(iepoch+1)));
-    values(iepoch,:) = value;
-    times(1, iepoch) = time;
-end
-
-end
-
-function [pulsatility_value, time] = pulsatility(heart_beat_signal, heart_beat_time)
-    [systolic_peak, i_sys_peak] = max(heart_beat_signal);
-    diastolic_peak = min(heart_beat_signal(i_sys_peak:end, :));
-    pulsatility_value = (systolic_peak - diastolic_peak) ./ diastolic_peak;
-    time = heart_beat_time(1) + (heart_beat_time(end) - heart_beat_time(1)) / 2;
-end
