@@ -219,7 +219,7 @@ end
 tfa_index_labels = process_psa_tfa('tfa_index_labels');
 ar_index_labels = [{'AR_Mx_mova', 'AR_Mx_block'} tfa_index_labels];
 ar_indices = struct(); 
-pulsatility_indices = struct(); % A.Z
+pulsatility_indices = struct(); % for table
 ar_indices.Subject = '';
 for i_cbfi_chan=1:length(CBFi_channel_labels)
     cbfi_chan_label = CBFi_channel_labels{i_cbfi_chan};
@@ -492,53 +492,12 @@ for iacq=1:length(acq_defs)
                                                     'scalarprod',    0, ...
                                                     'outputmode',    'input');  % separately for each file
        
-
-            %a.z version 3: 
+            %Extrait les statistiques de l'indice de pulsatilité pour chaque canal valide
+            % pour chaque canal CBFi valide (non marqué "bad") dans le fichier Brainstorm correspondant.
+            % Les résultats sont stockés dans les structures ar_indices et pulsatility_indices pour export ultérieur.
+            [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( sFile_puls, cfbi_idx_chans, channel_labels, ar_indices, ...
+                                                    pulsatility_indices, i_ar_index, subject_tag, suffix);
             
-            puls_data = in_bst(sFile_puls);                        % Charge les données de pulsatility
-            flags_struct = in_bst_data(sFile_puls, 'ChannelFlag'); % Charge les flags des canaux
-
-            good_channels = find(flags_struct.ChannelFlag == 1) ;   % prendre indices canaux valides (non marqués "bad") ex : 7,8
-            
-            good_cbfi_idx = intersect(cfbi_idx_chans, good_channels); % Indices CBFi valides seulement
-            
-            for i_cbfi = 1:length(good_cbfi_idx)                   % Boucle sur chaque canal CBFi valide
-                chan_idx = good_cbfi_idx(i_cbfi);                  % Index du canal courant
-                chan_label = channel_labels{chan_idx};             % Nom du canal
-            
-                if isfield(puls_data, 'RowNames') && ~isempty(puls_data.RowNames)
-                    data_idx = find(strcmp(chan_label, puls_data.RowNames)); % Trouve l'index correspondant
-                else
-                    data_idx = chan_idx;                           % Sinon utilise l'index brut
-                end
-            
-                if isempty(data_idx) || all(isnan(puls_data.F(data_idx, :)))
-                    warning('No pulsatility data found for channel %s', chan_label); % Si pas de données, sauter
-                    continue;
-                end
-            
-                pi_values = puls_data.F(data_idx, :);              % Récupère les valeurs de PI
-                pi_values = pi_values(~isnan(pi_values));          % Supprime les NaN
-            
-                %if isempty(pi_values)
-                %    continue;                                      % Ignore si aucune valeur restante
-                %end
-            
-                pi_avg = mean(pi_values);                          % Calcule la moyenne
-                
-                fprintf('PI average a.z. : %.4f\n', pi_avg); %TCD left , puis TCD right ET REST first then STAND
-                fprintf('Pulsatilityfile a.z: %s\n', sFile_puls);
-            
-                pi_label = protect_field_label(['Pulsatility_' chan_label suffix]); % Nom du champ de sortie
-                ar_indices(i_ar_index).(pi_label) = pi_avg;        % Stocke la moyenne dans la structure finale
-                pulsatility_indices(i_ar_index).Subject = subject_tag;
-                pulsatility_indices(i_ar_index).(pi_label) = pi_avg;
-
-                disp(['Pulsatility file generated: ', sFile_puls]);
-            end
-            
-
-
         end
     end % end of loop over conditions (eg rest, stand)
 end % end of loop over acquisitions
@@ -1083,4 +1042,118 @@ if save_colbar
 end
 close(hFigSurfData);
 
+end
+
+function [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( ...
+    sFile_puls, cfbi_idx_chans, channel_labels, ar_indices, pulsatility_indices, ...
+    i_ar_index, subject_tag, suffix)
+
+    puls_data = in_bst(sFile_puls, [], 1, 1);   % Charge les données de pulsatility en ignore bad segments
+    
+    %fs = 1 / (puls_data.Time(2) - puls_data.Time(1));  % Calcule la fréquence d'échantillonnage
+
+
+
+
+    flags_struct = in_bst_data(sFile_puls, 'ChannelFlag'); % Charge les flags des canaux
+
+    good_channels = find(flags_struct.ChannelFlag == 1) ;   % prendre indices canaux valides (non marqués "bad") ex : 7,8
+
+    good_cbfi_idx = intersect(cfbi_idx_chans, good_channels); % Indices CBFi valides seulement
+
+    for i_cbfi = 1:length(good_cbfi_idx)                   % Boucle sur chaque canal CBFi valide
+        chan_idx = good_cbfi_idx(i_cbfi);                  % Index du canal courant
+        chan_label = channel_labels{chan_idx};             % Nom du canal
+
+        if isfield(puls_data, 'RowNames') && ~isempty(puls_data.RowNames)
+            data_idx = find(strcmp(chan_label, puls_data.RowNames)); % Trouve l'index correspondant
+        else
+            data_idx = chan_idx;                           % Sinon utilise l'index brut
+        end
+
+        if isempty(data_idx) || all(isnan(puls_data.F(data_idx, :)))
+            warning('No pulsatility data found for channel %s', chan_label); % Si pas de données, sauter
+            continue;
+        end
+
+        
+        signal = puls_data.F(data_idx, :);                 % Signal brut avec NaN
+        time_vector = puls_data.Time;                      % Vecteur temps associé
+        
+        % Exclure les NaN du signal et du temps
+        valid_idx = ~isnan(signal);
+        pi_values = signal(valid_idx);
+        time_vector = time_vector(valid_idx);
+
+        %if isempty(pi_values)
+        %    continue;                                      % Ignore si aucune valeur restante
+        %end
+
+        pi_avg = mean(pi_values);                          % Calcule la moyenne
+
+        %fprintf('PI average a.z. : %.4f\n', pi_avg); %TCD left , puis TCD right ET REST first then STAND
+        %fprintf('Pulsatilityfile a.z: %s\n', sFile_puls);
+        %pi_label = protect_field_label(['Pulsatility_' chan_label suffix]); % Nom du champ de sortie
+        %ar_indices(i_ar_index).(pi_label) = pi_avg;        % Stocke la moyenne dans la structure finale
+        %pulsatility_indices(i_ar_index).Subject = subject_tag;
+        %pulsatility_indices(i_ar_index).(pi_label) = pi_avg;
+
+        % Calcul des statistiques             
+        pi_avg = mean(pi_values);
+
+        [pi_min, idx_min] = min(pi_values);
+        [pi_max, idx_max] = max(pi_values);
+        
+        % Calcul du temps associé si tu connais ta fréquence d'échantillonnage (ex. 50 Hz)
+        %time_vector = (0:length(pi_values)-1) / fs;  % fs = fréquence d'échantillonnage en Hz
+        
+        time_min = time_vector(idx_min);
+        time_max = time_vector(idx_max);
+        
+        % Formatage texte avec valeur + temps
+        str_min = sprintf('%.3f @ %.2fs', pi_min, time_min);
+        str_max = sprintf('%.3f @ %.2fs', pi_max, time_max);
+
+        pi_std = std(pi_values);                
+        % Construction des noms de champ
+        base_label = protect_field_label(['Pulsatility_' chan_label suffix]);                
+        % Ajout dans ar_indices
+        ar_indices(i_ar_index).([base_label '_avg']) = pi_avg;
+        ar_indices(i_ar_index).([base_label '_min']) = pi_min;
+        ar_indices(i_ar_index).([base_label '_max']) = pi_max;
+        ar_indices(i_ar_index).([base_label '_std']) = pi_std;
+        % Ajout dans pulsatility_indices (pour le .tsv)
+        pulsatility_indices(i_ar_index).Subject = subject_tag;
+        pulsatility_indices(i_ar_index).([base_label '_avg']) = pi_avg;
+        pulsatility_indices(i_ar_index).([base_label '_min']) = str_min;
+        pulsatility_indices(i_ar_index).([base_label '_max']) = str_max;
+        pulsatility_indices(i_ar_index).([base_label '_std']) = pi_std;
+
+        %Two plot
+        
+       
+        base_fig_dir = '/mnt/lesca-data-proc/Project/ACTIONcardioRisk/ACTIONcR_TCD_autoregulation/data_analysis/pulsatility_figures';
+        fig_folder = fullfile(base_fig_dir, subject_tag);
+        if ~exist(fig_folder, 'dir')
+            mkdir(fig_folder);
+        end
+
+        %disp(['Pulsatility file generated: ', sFile_puls]);
+        f1 = figure('Visible', 'off');
+        boxplot(pi_values);
+        title(['Boxplot of PI - ' chan_label suffix]);
+        ylabel('Pulsatility Index');
+        xlabel('Channel');
+        saveas(f1, fullfile(fig_folder, ['boxplot_' chan_label suffix '.png']));
+        close(f1);
+        
+        f2 = figure('Visible', 'off');
+        histfit(pi_values, 30);  % Gaussian fit
+        title(['Histogram + Fit - ' chan_label suffix]);
+        xlabel('Pulsatility Index');
+        ylabel('Frequency');
+        saveas(f2, fullfile(fig_folder, ['histfit_' chan_label suffix '.png']));
+        close(f2);
+
+    end
 end
