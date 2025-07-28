@@ -118,7 +118,7 @@ switch action
         [imported_files, redone] = import_tcd_files(acqs_info, options);
         if options.import.load_markings
             % TODO properly handle timestamp to avoid overwriting when syncing after fresh import 
-            psa_ppl_tcd_autoreg_V1('sync_markings', options, {acqs_info(redone==1).acq_name}, 'load_all');
+            %psa_ppl_tcd_autoreg_V1('sync_markings', options, {acqs_info(redone==1).acq_name}, 'load_all');
         end
         varargout{1} = imported_files;
         varargout{2} = redone;
@@ -357,6 +357,7 @@ for iacq=1:length(acq_defs)
             for igap=1:length(options.gaps)
                 gap_ichannel = find(~cellfun(@isempty, regexp(channel_labels, options.gaps(igap).channel_label)));
                 if isempty(gap_ichannel)
+                    
                     error('No channel matching %s for gap filling', options.gaps(igap).channel_label);
                 end
                 fgap_item = [acq_name '/' proc_folder '/' prefix options.gaps(igap).event_label '_filled' ];
@@ -416,7 +417,7 @@ for iacq=1:length(acq_defs)
                 delete(export_tmp_fn);
             end
         end
-
+       
         tfa_item = [acq_name '/' proc_folder '/' prefix 'TFA' ];
         [sFile_tfa, redone] = nst_run_bst_proc(tfa_item, 0, ...
                                                 'process_psa_tfa', sFile_mov_avg, [], ...
@@ -445,9 +446,18 @@ for iacq=1:length(acq_defs)
         mx_data = in_bst(sFile_mx);
         for i_tcd_chan=1:length(cfbi_idx_chans)
             tcd_chan_label = channel_labels{cfbi_idx_chans(i_tcd_chan)};
-            corr_tcd_idx_chan = find(~cellfun(@isempty, regexpi(corr_data.RowNames, tcd_chan_label)));
+            %corr_tcd_idx_chan = find(~cellfun(@isempty, regexpi(corr_data.RowNames, tcd_chan_label)));
+            if iscell(corr_data.RowNames) || isstring(corr_data.RowNames)
+                corr_tcd_idx_chan = find(~cellfun(@isempty, regexpi(corr_data.RowNames, tcd_chan_label)));
+            else
+                warning('corr_data.RowNames is not a cell or string array for subject %s', subject_tag);
+                corr_tcd_idx_chan = [];
+            end
+
+
             if isempty(corr_tcd_idx_chan)
                 if MatFlag.ChannelFlag(cfbi_idx_chans(i_tcd_chan)) == 1
+                    continue
                     error('TCD channel %s not found in correlation matrix for Mx computation', tcd_chan_label);
                 else
                     continue
@@ -517,7 +527,9 @@ if ~options.do_preproc_only
         write_log(['Save AR index table to ' ar_table_fn '\n']);
         writetable(pulsatility_table, pulsatility_table_fn, 'WriteRowNames', true, ...
                   'Delimiter', 'tab', ...
-                  'FileType', 'text'); 
+                  'FileType', 'text');
+        % Génère le graphique à barres groupées à partir du fichier .tsv
+        plot_grouped_pulsatility_avg(pulsatility_table_fn);
     end
 end
 end
@@ -1132,11 +1144,19 @@ function [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( ..
         %Two plot
         
        
-        base_fig_dir = '/mnt/lesca-data-proc/Project/ACTIONcardioRisk/ACTIONcR_TCD_autoregulation/data_analysis/pulsatility_figures';
-        fig_folder = fullfile(base_fig_dir, subject_tag);
+        base_fig_dir = '/home/lesca-student/ACTIONcR_TCD_autoregulation/data_analysis/pulsatility_figures';
+
+        % Génère un tag unique à partir du nom de fichier complet
+        [~, sFileBase, ~] = fileparts(sFile_puls);
+        safe_tag = protect_fn_str(sFileBase);  % Nettoie le nom pour l'utiliser dans un dossier
+        
+        % Utilise un sous-dossier unique pour éviter les collisions
+        fig_folder = fullfile(base_fig_dir, [subject_tag '__' safe_tag]);
+        
         if ~exist(fig_folder, 'dir')
             mkdir(fig_folder);
         end
+
 
         %disp(['Pulsatility file generated: ', sFile_puls]);
         f1 = figure('Visible', 'off');
@@ -1157,3 +1177,51 @@ function [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( ..
 
     end
 end
+
+function plot_grouped_pulsatility_avg(tsv_path)
+    [folder_path, file_base, ~] = fileparts(tsv_path);
+    T = readtable(tsv_path, 'FileType', 'text', 'Delimiter', '\t');
+
+    % Get averages du tableau et std
+    is_avg = endsWith(T.Properties.VariableNames, '_avg');
+    avg_data = T{:, is_avg};
+    avg_labels = T.Properties.VariableNames(is_avg);
+    std_labels = strrep(avg_labels, '_avg', '_std');
+    std_data = T{:, std_labels};
+
+    % https://www.mathworks.com/help/matlab/ref/bar.html
+    figure('Visible', 'off');
+    bh = bar(avg_data, 'grouped');
+    hold on;
+
+    % Calculate number of groups and bars per group
+    [nGroups, nBars] = size(avg_data);
+
+    % Find the x positions for each bar
+    groupWidth = min(0.8, nBars/(nBars + 1.5));
+
+    errorsbar=true; %afficher ou pas
+
+    if errorsbar
+        for i = 1:nBars
+            % Calculate center of each bar group
+            x = (1:nGroups) - groupWidth/2 + (2*i-1) * groupWidth / (2*nBars);
+            errorbar(x, avg_data(:,i),std_data(:,i), '.', 'Color', [0.5 0.5 0.5], 'LineWidth', 0.5, 'CapSize', 3); %errorbar(x, avg_data(:, i), std_data(:, i), 'k.', 'LineWidth', 1);
+        end
+    end
+    title('Pulsatility Index - Moyennes avec écarts-types');
+    ylabel('Pulsatility Index moyen');
+    xticks(1:nGroups);
+    xticklabels(T.Subject);
+    xtickangle(45);
+    legend(avg_labels, 'Interpreter', 'none', 'Location', 'northeastoutside');
+    grid on;
+
+    % 
+    fig_path = fullfile('/home/lesca-student/ACTIONcR_TCD_autoregulation/data_analysis', 'grouped_pulsatility_avg.png');
+    saveas(gcf, fig_path);
+    close(gcf);
+    disp(['Graphique enregistré ici : ' fig_path]);
+
+end
+

@@ -28,8 +28,8 @@ end
 function sProcess = GetDescription() %#ok<DEFNU>
 % Description the process
 %TOCHECK: how do we limit the input file types (only NIRS data)?
-sProcess.Comment     = 'Moving average';
-sProcess.FileTag     = 'pulsatility'; %movmean
+sProcess.Comment     = 'Pulsatility';
+sProcess.FileTag     = 'movmean';
 sProcess.Category    = 'File';
 sProcess.SubGroup    = 'Pre-process';
 sProcess.Index       = 1305; %0: not shown, >0: defines place in the list of processes
@@ -142,8 +142,8 @@ end
 end
 
 function [pulsatility_value, time] = pulsatility(heart_beat_signal, heart_beat_time)
-    [systolic_peak, i_sys_peak] = max(heart_beat_signal);
-    diastolic_peak = min(heart_beat_signal(i_sys_peak:end, :));
-    pulsatility_value = (systolic_peak - diastolic_peak) ./ diastolic_peak;
+    systolic_peak = max(heart_beat_signal);
+    diastolic_peak = min(heart_beat_signal);
+    pulsatility_value = abs(systolic_peak - diastolic_peak) ./ systolic_peak;
     time = heart_beat_time(1) + (heart_beat_time(end) - heart_beat_time(1)) / 2;
 end
