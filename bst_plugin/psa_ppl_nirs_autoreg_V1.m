@@ -1,7 +1,8 @@
 function varargout = psa_ppl_nirs_autoreg_V1(action, options, arg1, arg2)
-%PSA_PPL_TCD_AUTOREG_V1
-% Manage an autoregulation pipeline starting from raw TCD + continuous 
-% boold pressure data up to autoregulation index computation.
+%PSA_PPL_NIRS_AUTOREG_V1
+% Manage an autoregulation pipeline starting from raw NIRS + continuous 
+% blood pressure data up to autoregulation index computation. It was also
+% used to get the pulsatility index using ECG and nirs signal.
 %
 % This pipeline can keep track of user-defined markings outside of brainstorm db 
 % such as experiment stages, gap etc. This allows to safely flush all
@@ -14,7 +15,7 @@ function varargout = psa_ppl_nirs_autoreg_V1(action, options, arg1, arg2)
 %
 %   %% Importation script
 %
-%   options = PSA_PPL_TCD_AUTOREG_V1('get_options'); % get default pipeline options
+%   options = PSA_PPL_NIRS_AUTOREG_V1('get_options'); % get default pipeline options
 %
 %   % Define options (optional):
 %   options.export_dir_events = 'path/to/export/events';
@@ -31,10 +32,10 @@ function varargout = psa_ppl_nirs_autoreg_V1(action, options, arg1, arg2)
 %
 %   %% Markings export script
 %
-%   PSA_PPL_TCD_AUTOREG_V1('save_markings', options, subject_names);
+%   PSA_PPL_NIRS_AUTOREG_V1('save_markings', options, subject_names);
 %
 %   %% Analysis script
-%   options = PSA_PPL_TCD_AUTOREG_V1('get_options');
+%   options = PSA_PPL_NIRS_AUTOREG_V1('get_options');
 %   % Define export options again (redundant so this could be factorized)
 %   options.export_dir_events = 'path/to/export/events';
 %   options.export_dir_channel_flags = 'path/to/export/channel_flags';
@@ -43,14 +44,14 @@ function varargout = psa_ppl_nirs_autoreg_V1(action, options, arg1, arg2)
 %   ...
 % 
 %   % Run the pipeline (and  save user markings):
-%   PSA_PPL_TCD_AUTOREG_V1('analyse', options);
+%   PSA_PPL_NIRS_AUTOREG_V1('analyse', options);
 %
 %   % For a minimal working example see
 %   pulsage/script/tcd_autoregulation_pipeline.m [TODO]
 %
 %% Setup and importation
 %
-% DEFAULT_OPTIONS = PSA_PPL_TCD_AUTOREG_V1('get_options')
+% DEFAULT_OPTIONS = PSA_PPL_NIRS_AUTOREG_V1('get_options')
 %     Return default options
 %
 % FILES_RAW = PSA_PPL_TCD_AUTOREG_V1('import', OPTIONS, ACQS_INFO)
@@ -156,10 +157,14 @@ switch action
         else
             sync_mode = 'sync';
         end
+
         % TODO adapt for NIRS and Labchart
-        orig_cond = ['origin' get_ppl_tag()];
+
+        %origin saving
+        orig_cond = ['origin_labchart' get_ppl_tag()];
         files_raw = cellfun(@(s)  nst_get_bst_func_files(s, orig_cond , 'Raw'), ...
                            subject_names, 'UniformOutput', false);
+
         missing_raw = cellfun(@isempty, files_raw);
         if any(missing_raw)
             warning(sprintf('Missing Raw data files for subjects (will be ignored):\n%s\n', ...
@@ -168,23 +173,58 @@ switch action
         end
         files_raw = files_raw(~missing_raw);
 
-        preproc_cond = ['preproc_' get_ppl_tag()];
-        files_chan_fix = cellfun(@(s)  nst_get_bst_func_files(s, preproc_cond , 'Raw_Chan_Fix'), ...
+        orig_cond_nirs = ['origin_nirs' get_ppl_tag()];
+        files_raw2 = cellfun(@(s)  nst_get_bst_func_files(s, orig_cond_nirs , 'Raw'), ...
+                           subject_names, 'UniformOutput', false);
+
+        missing_raw = cellfun(@isempty, files_raw2);
+        if any(missing_raw)
+            warning(sprintf('Missing Raw data files for subjects (will be ignored):\n%s\n', ...
+                            strjoin(cellfun(@(s) sprintf(' - %s', s), subject_names(missing_raw), ...
+                                    'UniformOutput', false), '\n')));
+        end
+        files_raw2 = files_raw2(~missing_raw);
+
+
+        
+        %preproc saving duplicate it for the two preproc folders
+        preproc_cond = ['preproc_labchart' get_ppl_tag()];
+        files_chan_fix = cellfun(@(s)  nst_get_bst_func_files(s, preproc_cond , 'Events_delete_duplicated_item'), ...
                            subject_names, 'UniformOutput', false);
         missing_chan_fix = cellfun(@isempty, files_chan_fix);
         if any(missing_chan_fix)
             warning(sprintf('Missing Raw_Chan_Fix data files for subjects (will be ignored):\n%s\n', ...
-                            strjoin(cellfun(@(s) sprintf(' - %s', s), subject_names(missing_chan_fix), ...
+                             strjoin(cellfun(@(s) sprintf(' - %s', s), subject_names(missing_chan_fix), ...
                                     'UniformOutput', false), '\n')));
         end
         files_chan_fix = files_chan_fix(~missing_chan_fix);
+
+
+
+        %preproc saving duplicate it for the two preproc folders
+        preproc_cond_nirs = ['preproc_nirs' get_ppl_tag()];
+        files_chan_fix2 = cellfun(@(s)  nst_get_bst_func_files(s, preproc_cond_nirs , 'Events_uploaded'), ...
+                           subject_names, 'UniformOutput', false);
+        missing_chan_fix = cellfun(@isempty, files_chan_fix2);
+        if any(missing_chan_fix)
+            warning(sprintf('Missing Raw_Chan_Fix data files for subjects (will be ignored):\n%s\n', ...
+                             strjoin(cellfun(@(s) sprintf(' - %s', s), subject_names(missing_chan_fix), ...
+                                    'UniformOutput', false), '\n')));
+        end
+        files_chan_fix2 = files_chan_fix2(~missing_chan_fix);
+
+
+
         
-        files_to_sync = [files_raw files_chan_fix];
+        files_to_sync = [files_raw files_raw2 files_chan_fix files_chan_fix2];
         
         create_dirs(options);
         sync_markings(files_to_sync, options, sync_mode);
         varargout{1} = files_to_sync;
         return;
+
+
+
     case 'analyse'
 
     otherwise
@@ -263,11 +303,7 @@ for iacq=1:length(acq_defs)
 
     % NIRS Motion correction
     preproc_nirs_folder = ['preproc_nirs' get_ppl_tag()];
-    file_raw_nirs = nst_get_bst_func_files(acq_name, ['origin_nirs' get_ppl_tag()], 'Raw');
-    [file_nirs_moco, redo_parent] = nst_run_bst_proc([preproc_nirs_folder '/Motion-corrected'], 0, ...
-                                                     'process_nst_motion_correction', file_raw_nirs, [], ...
-                                                      'option_event_name', 'movement_artefacts');
-
+    
     % Lacbchart preproc
     origin_labchart_folder = ['origin_labchart' get_ppl_tag()];
     preproc_labchart_folder = ['preproc_labchart' get_ppl_tag()];
@@ -315,11 +351,32 @@ for iacq=1:length(acq_defs)
     cfbi_idx_chans = find(ismember(channel_labels, CBFi_channel_labels));
 
 
+
+
+
+
+
     chan_fix_item = [acq_name '/' preproc_labchart_folder '/Raw_Fix' ];
-    [sFile_labchart_hb, redone] = nst_run_bst_proc(chan_fix_item, 0, ...
+    existing_file = nst_get_bst_func_files(acq_name, preproc_labchart_folder, 'Events_delete_duplicated_item');
+    
+    if ~isempty(existing_file)
+        sFile_labchart_hb = existing_file;
+        redone = 0;
+        fprintf('Skip duplication: Raw_Fix already exists for %s\n', acq_name);
+    else
+        [sFile_labchart_hb, redone] = nst_run_bst_proc(chan_fix_item, 0, ...
                                                 'process_duplicate', file_raw_labchart, [], ...
                                                 'target', 1, ...  % Duplicate data files
                                                 'tag',    '_copy');
+    end
+        
+        
+
+
+
+
+
+
 
     if options.heart_beats.do
         detect_heart_beats(sFile_labchart_hb, ...
@@ -330,37 +387,85 @@ for iacq=1:length(acq_defs)
     if options.do_preproc_only
         continue
     end
+    
+    
+
+
 
     % Merge NIRs + labchart (TODO)
     % === Duplicate to new condition
     process_folder = ['process' get_ppl_tag()];
     target_item = [acq_name '/' process_folder '/Raw'];
     
-    % [file_nirs_proc, redone] = nst_run_bst_proc(target_item, 0, ...
-    %                                             'process_duplicate', file_nirs_moco, [], ...
-    %                                             'target', 1, ...
-    %                                             'tag', '_copy');
     
-    % === Merge events into new copy
-    % Vérifie si le fichier "Motion-corrected | sync_events" existe déjà
-    existing_sync = bst_process('CallProcess', 'process_select_files_data', [], [], ...
-        'subjectname', acq_name, ...
-        'condition',   ['preproc_nirs' get_ppl_tag()], ...
-        'tag',         'sync_events', ...
-        'includebad',  0, ...
-        'includeintra', 0);
     
-    if ~isempty(existing_sync)
-        % Fichier déjà existant => ne pas régénérer
-        file_nirs_proc = existing_sync;
+    file_raw_nirs = nst_get_bst_func_files(acq_name, ['origin_nirs' get_ppl_tag()], 'Raw');
+
+   
+    
+    
+    
+    chan_fix_item = [acq_name '/' preproc_nirs_folder '/Raw_Fix' ];
+    existing_file = nst_get_bst_func_files(acq_name, preproc_nirs_folder, 'Events_uploaded');
+    
+    if ~isempty(existing_file)
+        file_nirs_moco = existing_file;
+        redone = 0;
+        fprintf('Skip duplication: Raw_Fix already exists for %s\n', acq_name);
     else
-        % Sinon, on le génère
-        file_nirs_proc = bst_process('CallProcess', 'process_evt_transfer', ...
-            sFile_labchart_hb, file_nirs_moco, ...
-            'src',  'CMT oxysoft sync', ...
-            'dest', 'Z');
+        [file_nirs_moco, redone] = nst_run_bst_proc(chan_fix_item, 0, ...
+                                                'process_duplicate', file_raw_nirs, [], ...
+                                                'target', 1, ...  % Duplicate data files
+                                                'tag',    '_copy');
+    end
+        
+        
+        
+        
+    
+    
+    
+    
+    
+    % Renaming events before merging 
+    % List of event names to rename as 'Z'
+    rename_to_Z_list = {'labchart sync'};  % Add more names here if needed
+    % Load existing events
+    data_evt_nirs = in_bst_data(file_raw_nirs, 'Events');
+    event_labels_nirs = {data_evt_nirs.Events.label};
+    
+    % Loop over list and rename if present
+    for iName = 1:length(rename_to_Z_list)
+        src_evt = rename_to_Z_list{iName};
+        if any(strcmp(event_labels_nirs, src_evt))
+            file_nirs_moco = bst_process('CallProcess', 'process_evt_rename', file_nirs_moco, [], ...
+                'src',   src_evt, ...
+                'dest',  'Z');
+            fprintf('Événement "%s" renommé en "Z" dans %s\n', src_evt, file_nirs_moco.FileName);
+            break; 
+        end
     end
 
+    % Process: Detect multiple responses and keep one
+    evt_delete_double_item = [acq_name '/' 'preproc_labchart__psanar_V1' '/Events_delete_duplicated_item'];
+    [file_nirs_proc, ~]= nst_run_bst_proc(evt_delete_double_item,0,'process_evt_multiresp',sFile_labchart_hb, [], ...
+                                            'responses', 'CMT oxysoft sync', ...
+                                            'dt',        0.001, ...
+                                            'action',    1, ...  % Keep only the first event
+                                            'rename',    0);
+    
+    % === Merge events into new copy
+    evt_sync_item = [acq_name '/' 'preproc_nirs__psanar_V1' '/Events_uploaded'];
+    [file_nirs_proc, ~] = nst_run_bst_proc(evt_sync_item, 0, ...
+                                           'process_evt_transfer', ...
+                                            sFile_labchart_hb, file_nirs_moco, ...
+                                            'src',  'CMT oxysoft sync', ...
+                                            'dest', 'Z');
+
+    
+    
+    continue
+    
     sFiles_cond = {};
     prefixes = {};
     suffixes = {};
@@ -371,6 +476,8 @@ for iacq=1:length(acq_defs)
             if isempty(idx_event_cond) || isempty(events(idx_event_cond).times)
                 continue
             end
+            %condition = ['sync ' options.conditions];
+          
             %Importation de rest_RAW et stand_Raw dans proc__psanar_V1
             raw_cond_item = [acq_name '/' proc_folder '/' condition '_Raw' ];
             [sFile_cond, redone] = nst_run_bst_proc(raw_cond_item, 0, ...
@@ -407,6 +514,8 @@ for iacq=1:length(acq_defs)
         prefixes = {''};
         suffixes = {''};
     end
+    
+    i_ar_index = length(pulsatility_indices) + 1;
 
     for ifile=1:length(sFiles_cond)
         % Fill gaps
@@ -436,6 +545,24 @@ for iacq=1:length(acq_defs)
                                  'subjectname', acq_name, ...
                                  'condition',   proc_folder, ...
                                  'tag',         tag_inversion, ...
+                                 'includebad',  0, ...
+                                 'includeintra', 0);
+        end
+
+        tag_motion_correction = [prefix '_motion_correct_nirs'];
+        if ~any(strcmp(existing_comments, tag_motion_correction))
+            sFiles = bst_process('CallProcess','process_nst_motion_correction', sFiles, [], ...
+                                                      'option_event_name', 'movement_artefacts');
+
+            % Process: Set name: _NORM_nirs
+            sFiles = bst_process('CallProcess', 'process_set_comment', sFiles, [], ...
+                                 'tag', tag_motion_correction, ...
+                                 'isindex', 1);%1 POUR NUMERICAL INDEX
+        else
+            sFiles = bst_process('CallProcess', 'process_select_files_data', [], [], ...
+                                 'subjectname', acq_name, ...
+                                 'condition',   proc_folder, ...
+                                 'tag',         tag_motion_correction, ...
                                  'includebad',  0, ...
                                  'includeintra', 0);
         end
@@ -514,108 +641,6 @@ for iacq=1:length(acq_defs)
                                                     pulsatility_indices, i_ar_index, subject_tag, suffix);
             
         end
-
-        % if options.fill_gaps.do
-        %     for igap=1:length(options.gaps)
-        %         gap_ichannel = find(~cellfun(@isempty, regexp(channel_labels, options.gaps(igap).channel_label)));
-        %         if isempty(gap_ichannel)
-        %             error('No channel matching %s for gap filling', options.gaps(igap).channel_label);
-        %         end
-        %         fgap_item = [acq_name '/' proc_folder '/' prefix options.gaps(igap).event_label '_filled' ];
-        %         [sFile_fgaps, redone] = nst_run_bst_proc(fgap_item, 0, ...
-        %                                                 'process_psa_fill_gaps', sFile_fgaps, [], ...
-        %                                                 'option_event_name',  options.gaps(igap).event_label, ...
-        %                                                 'option_channels',    channel_labels(gap_ichannel), ...
-        %                                                 'option_ar_win_size', options.fill_gaps.ar_win_size_sec, ...
-        %                                                 'option_ar_order',    options.fill_gaps.ar_order_sec);
-        %     end
-        % end
-
-        
-        % mx_item = [acq_name '/' proc_folder '/' prefix 'Mx' ];
-        % % TODO expose otions for block size and pct filter
-        % [sFile_mx, redone] = nst_run_bst_proc(mx_item, 0, ...
-        %                                       'process_psa_mx', sFile_fgaps, [], ...
-        %                                       'abp_channel', BP_channel_label, ...
-        %                                       'cbf_channels', channel_labels(cfbi_idx_chans));
-        % 
-
-        % if options.moving_average.do
-        %     win_avg_comment = [prefix 'mov_average'];
-        %     win_avg_item = [acq_name '/' proc_folder '/' win_avg_comment ];
-        % 
-        %     [sFile_mov_avg, redone] = nst_run_bst_proc(win_avg_item, 0, ...
-        %                                                 'process_psa_moving_average', sFile_filtered, [], ...
-        %                                                 'option_channels', [BP_channel_label channel_labels(cfbi_idx_chans)], ...
-        %                                                 'option_win_size', options.moving_average_window_sec);
-        % else
-        %     sFile_mov_avg = sFile_filtered;
-        % end
-
-        % if options.export_preproc.do
-        %     export_fn = fullfile(options.export_dir_preprocessed, ...
-        %         [acq_name '_' win_avg_comment '.tsv']);
-        %     if ~exist(export_fn, 'file')
-        %         export_tmp_fn = fullfile(tempdir, [acq_name '_' win_avg_comment '.tsv']);
-        %         write_log(['Export preprocessed data to tsv for ' acq_name ', ' prefix '\n']);
-        %         export_data(sFile_mov_avg, [], export_tmp_fn, 'ASCII-TSV-HDR-TR');
-        %         copyfile(export_tmp_fn, export_fn);
-        %         delete(export_tmp_fn);
-        %     end
-        % end
-        % 
-        % tfa_item = [acq_name '/' proc_folder '/' prefix 'TFA' ];
-        % [sFile_tfa, redone] = nst_run_bst_proc(tfa_item, 0, ...
-        %                                         'process_psa_tfa', sFile_mov_avg, [], ...
-        %                                         'ref_channel', BP_channel_label, ...
-        %                                         'transfer_channels', channel_labels(cfbi_idx_chans));
-        % 
-        % corr_item = [acq_name '/' proc_folder '/' prefix 'corr' ];
-        % 
-        % Load correlation matrix and extract values for CBFi channels
-        % corr_data = in_bst(sFile_corr);
-        % corr_mat = process_compress_sym('Expand', corr_data.TF, length(corr_data.RowNames));
-        % corr_mat = reshape(corr_mat, length(corr_data.RowNames), length(corr_data.RowNames));
-        % iBP_chan = strcmp(BP_channel_label, corr_data.RowNames);
-        % MatFlag = in_bst_data(sFile_mov_avg, 'ChannelFlag');
-        % 
-        % tfa_data = in_bst(sFile_tfa);
-        % mx_data = in_bst(sFile_mx);
-        % for i_tcd_chan=1:length(cfbi_idx_chans)
-        %     tcd_chan_label = channel_labels{cfbi_idx_chans(i_tcd_chan)};
-        %     corr_tcd_idx_chan = find(~cellfun(@isempty, regexpi(corr_data.RowNames, tcd_chan_label)));
-        %     if isempty(corr_tcd_idx_chan)
-        %         if MatFlag.ChannelFlag(cfbi_idx_chans(i_tcd_chan)) == 1
-        %             error('TCD channel %s not found in correlation matrix for Mx computation', tcd_chan_label);
-        %         else
-        %             continue
-        %         end
-        %     end
-        % 
-        %     mx_index_label = protect_field_label(['AR_Mx_block_' tcd_chan_label]);
-        %     i_mx = strcmp(mx_index_label, mx_data.Description);
-        %     ar_index_label = [mx_index_label suffix];
-        %     if ~isnan(ar_indices(i_ar_index).(ar_index_label))
-        %         error('%s already computed for %s, duplicate condition or duplicate entry in manifest?', ar_index_label, subject_tag);
-        %     end
-        %     % fprintf('Set %s for %s\n', ar_index_label, subject_tag);
-        %     ar_indices(i_ar_index).(ar_index_label) = mx_data.Value(i_mx);
-        % 
-        %     ar_mx_mova = corr_mat(iBP_chan, corr_tcd_idx_chan);
-        %     ar_index_label = protect_field_label(['AR_Mx_mova_' tcd_chan_label suffix]);
-        %     if ~isnan(ar_indices(i_ar_index).(ar_index_label))
-        %         error('%s already computed for %s, duplicate condition or duplicate entry in manifest?', ar_index_label, subject_tag);
-        %     end
-        %     ar_indices(i_ar_index).(ar_index_label) = ar_mx_mova;
-        % 
-        %     for itfa_idx=1:length(tfa_index_labels)
-        %         tfa_index_label = protect_field_label([tfa_index_labels{itfa_idx} '_' tcd_chan_label suffix]);
-        % 
-        %         i_tfa = strcmp(tfa_index_label, tfa_data.Description);
-        %         ar_indices(i_ar_index).([tfa_index_label suffix]) = tfa_data.Value(i_tfa);
-        %     end
-        % end
-
     end % end of loop over conditions (eg rest, stand)
 end % end of loop over acquisitions
 
@@ -637,16 +662,10 @@ if ~options.do_preproc_only
                   'Delimiter', 'tab', ...
                   'FileType', 'text');
         % Génère le graphique à barres groupées à partir du fichier .tsv
-        plot_grouped_pulsatility_avg(pulsatility_table_fn);
+        %plot_grouped_pulsatility_avg(pulsatility_table_fn);
     end
 end
 end
-
-
-
-
-
-
 
 
 
@@ -1156,7 +1175,7 @@ function [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( ..
         %    continue;                                      % Ignore si aucune valeur restante
         %end
 
-        pi_avg = mean(pi_values);                          % Calcule la moyenne
+        pi_avg = median(pi_values);                          % Calcule la moyenne
 
         %fprintf('PI average a.z. : %.4f\n', pi_avg); %TCD left , puis TCD right ET REST first then STAND
         %fprintf('Pulsatilityfile a.z: %s\n', sFile_puls);
@@ -1166,7 +1185,7 @@ function [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( ..
         %pulsatility_indices(i_ar_index).(pi_label) = pi_avg;
 
         % Calcul des statistiques             
-        pi_avg = mean(pi_values);
+        
 
         [pi_min, idx_min] = min(pi_values);
         [pi_max, idx_max] = max(pi_values);
@@ -1335,7 +1354,7 @@ for iacq=1:length(acqs_info)
         discard_start = acqs_info(iacq).crop_start_time;
     end
     file_raw = nst_get_bst_func_files(subject_name, ...
-                                     ['origin' get_ppl_tag()], 'Raw');
+                                     ['origin_labchart' get_ppl_tag()], 'Raw');
     if ~isempty(file_raw)
         files_in = [files_in file_raw];
         redone_imports = [redone_imports 0];

@@ -28,7 +28,7 @@ end
 function sProcess = GetDescription() %#ok<DEFNU>
 % Description the process
 sProcess.Comment     = 'Real average pulsatility';
-sProcess.FileTag     = 'Average (no bad)';
+sProcess.FileTag     = 'avg_no_bad';
 sProcess.Category    = 'File';
 sProcess.SubGroup    = 'Average';
 sProcess.Index       = 1304; %0: not shown, >0: defines place in the list of processes

@@ -1144,7 +1144,7 @@ function [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( ..
         %Two plot
         
        
-        base_fig_dir = '/home/lesca-student/ACTIONcR_TCD_autoregulation/data_analysis/pulsatility_figures';
+        base_fig_dir = fullfile(fileparts(pwd), 'data_analysis', 'pulsatility_figures');
 
         % Génère un tag unique à partir du nom de fichier complet
         [~, sFileBase, ~] = fileparts(sFile_puls);
@@ -1218,10 +1218,10 @@ function plot_grouped_pulsatility_avg(tsv_path)
     grid on;
 
     % 
-    fig_path = fullfile('/home/lesca-student/ACTIONcR_TCD_autoregulation/data_analysis', 'grouped_pulsatility_avg.png');
+    fig_path = fullfile(fileparts(pwd), 'data_analysis', 'grouped_pulsatility_avg.png');
     saveas(gcf, fig_path);
     close(gcf);
-    disp(['Graphique enregistré ici : ' fig_path]);
+    %disp(['Graphique enregistré ici : ' fig_path]);
 
 end
 
