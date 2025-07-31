@@ -1,4 +1,4 @@
-function varargout = process_psa_average_ignoring_bad( varargin )
+function varargout = process_psa_average_time_robust( varargin )
 
 % @=============================================================================
 % This software is part of the Brainstorm software:
@@ -18,7 +18,9 @@ function varargout = process_psa_average_ignoring_bad( varargin )
 % For more information type "brainstorm license" at command prompt.
 % =============================================================================@
 %
-% Authors: Aymen Zire (2025-)
+% Authors: Aymen Zire, Thomas Vincent (2025-)
+%
+% Adapted from process_average_time.m
 
 eval(macro_method);
 end
@@ -27,11 +29,11 @@ end
 %% ===== GET DESCRIPTION =====
 function sProcess = GetDescription() %#ok<DEFNU>
 % Description the process
-sProcess.Comment     = 'Real average pulsatility';
-sProcess.FileTag     = 'avg_no_bad';
-sProcess.Category    = 'File';
+sProcess.Comment     = 'Average time (robust)';
+sProcess.FileTag     = @GetFileTag;
+sProcess.Category    = 'Filter';
 sProcess.SubGroup    = 'Average';
-sProcess.Index       = 1304; %0: not shown, >0: defines place in the list of processes
+sProcess.Index       = 304; %0: not shown, >0: defines place in the list of processes
 sProcess.Description = '';
 sProcess.isSeparator = 0; % add a horizontal bar after the process in the list
 % Definition of the input accepted by this process
@@ -41,12 +43,25 @@ sProcess.nInputs     = 1;
 sProcess.nMinFiles   = 1;
 % Definition of the options
 
-sProcess.options.option_channels.Comment = 'Channels (comma-separated types or names): ';
-sProcess.options.option_channels.Type    = 'text';
+sProcess.options.pct_filter_range.Comment = 'Percentile filter range (percent):';
+sProcess.options.pct_filter_range.Type    = 'range';
+sProcess.options.pct_filter_range.Value   = {[2.5 97.5], '%', 1};
 
-sProcess.options.option_win_size.Comment = 'Window size';
-sProcess.options.option_win_size.Type    = 'value';
-sProcess.options.option_win_size.Value   = {20, 'sec', 2};
+sProcess.options.use_bad_events.Comment = 'Use bad_ events to discard segments';
+sProcess.options.use_bad_events.Type       = 'checkbox';
+sProcess.options.use_bad_events.Value      = 0;
+
+% === FUNCTION
+sProcess.options.label2.Comment = '<U><B>Function</B></U>:';
+sProcess.options.label2.Type    = 'label';
+sProcess.options.avg_func.Comment = {'Arithmetic average:  <FONT color="#777777">mean(x)</FONT>', ...
+                                     'Root mean square (RMS):  <FONT color="#777777">sqrt(sum(x.^2)/N)</FONT>', ...
+                                     'Standard deviation:  <FONT color="#777777">sqrt(var(x))</FONT>', ...
+                                     'Median:  <FONT color="#777777">median(x)</FONT>'; ...
+                                     'mean', 'rms', 'std', 'median'};
+sProcess.options.avg_func.Type    = 'radio_label';
+sProcess.options.avg_func.Value   = 'mean';
+
 end
 
 %% ===== FORMAT COMMENT =====
@@ -54,94 +69,101 @@ function Comment = FormatComment(sProcess) %#ok<DEFNU>
 Comment = sProcess.Comment;
 end
 
-%% ===== RUN =====
-function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>
-OutputFiles = {};
-
-for iInput=1:length(sInputs)
-    % Load recordings
-    if strcmp(sInputs(iInput).FileType, 'data')     % Imported data structure
-        sDataIn = in_bst_data(sInputs(iInput).FileName);
-        events = sDataIn.Events;
-     
-    
-    elseif strcmp(sInputs(iInput).FileType, 'raw')  % Continuous data file
-        sDataIn = in_bst(sInputs(iInput).FileName, [], 1, 1, 'no');
-        sDataRaw = in_bst_data(sInputs(iInput).FileName, 'F');
-        events = sDataRaw.F.events;
+%% ===== GET FILE TAG =====
+function fileTag = GetFileTag(sProcess)
+    % Old version of the process: option isstd={0,1}
+    if isfield(sProcess.options, 'isstd') && ~isempty(sProcess.options.isstd) && sProcess.options.isstd.Value
+        fileTag = 'std';
+    % New version of the process: avg_fun={'mean','std','rms','median'}
+    elseif isfield(sProcess.options, 'avg_func') && ~isempty(sProcess.options.avg_func) && ~isempty(sProcess.options.avg_func.Value)
+        fileTag = sProcess.options.avg_func.Value;
+    else
+        fileTag = 'mean';
     end
- % v.1 added
-     % masque des bons échantillons 
-    sfreq = 1 / diff(sDataIn.Time(1:2));
-    nTimes = length(sDataIn.Time);
-    good_mask = true(1, nTimes);
+end
 
-     % Liste des labels d'événements à considérer comme "bad"
-    bad_event_labels = {'bad', 'bad_segments','BAD','Bad'};
 
-    % Appliquer le masque pour chaque événement "bad"
-    for iEvt = 1:length(events)
-        if any(strcmpi(events(iEvt).label, bad_event_labels))
-            for iSeg = 1:size(events(iEvt).times, 2)
-                iStart = max(1, round((events(iEvt).times(1, iSeg) - sDataIn.Time(1)) * sfreq) + 1);
-                iEnd   = min(nTimes, round((events(iEvt).times(2, iSeg) - sDataIn.Time(1)) * sfreq));
-                good_mask(iStart:iEnd) = false;
+%% ===== RUN =====
+function sInput = Run(sProcess, sInput) %#ok<DEFNU>
+channels = in_bst_channel(sInput.ChannelFile);
+channel_names = {channels.Channel.Name};
+nb_channels = size(sInput.A, 1);
+time_mask = true(nb_channels, size(sInput.TimeVector, 2));
+
+if ~ismatrix(sInput.A)
+    error('Unsupported number of dimensions');
+end
+
+% Filter bad segments
+if sProcess.options.use_bad_events.Value
+    sEvents = in_bst_data(sInput.FileName, 'Events');
+    bad_idx_events = find(~cellfun(@isempty, regexpi({sEvents.Events.label}, ['bad_.*'])));
+    if ~isempty(bad_idx_events)
+        channel_map = containers.Map(channel_names, 1:length(channel_names));
+        sfreq = 1/diff(sInput.TimeVector(1:2));
+        for evt_idx=bad_idx_events
+            suffix = sEvents.Events(evt_idx).label(5:end);
+            if channel_map.isKey(suffix)
+                ichannel = channel_map(suffix);
+                samplesBounds = round((sEvents.Events(evt_idx).times-sInput.TimeVector(1)) * sfreq);
+                time_mask(ichannel, samplesBounds(1):samplesBounds(2)) = 0;
+                fprintf('Discard channel-specific bad segment(s) using event %s\n', sEvents.Events(evt_idx).label);
+            else
+                fprintf('Discard bad segment(s) for all channels using event %s\n', sEvents.Events(evt_idx).label);
+                time_mask(:, samplesBounds(1):samplesBounds(2)) = 0;
             end
         end
     end
-
-
-
-    channels = in_bst_channel(sInputs(iInput).ChannelFile);
-    nb_channels = size(channels.Channel, 2);
-    if ~isempty(sProcess.options.option_channels.Value)
-        idx_chans = channel_find(channels.Channel, sProcess.options.option_channels.Value);
-        chan_mask = false(1, nb_channels);
-        chan_mask(idx_chans) = 1;
-    else
-        chan_mask = true(1, nb_channels);
-    end
-
-    signal = sDataIn.F(chan_mask, :)'; % signal : time x channel
-
-
-        % === Moyenne AVEC les bad ===
-    signal_orig = signal;  % version complète du signal
-    mean_with_bad = mean(signal_orig, 1);  % moyenne classique
-    
-    % === Moyenne SANS les bad ===
-    signal_bad_masked = signal;  % copie à modifier
-    signal_bad_masked(~good_mask, :) = NaN;  % NaN sur les segments "bad"
-    signal_avg = nanmean(signal_bad_masked, 1);  % moyenne sans bad, 1 x channel
-    
-    % === Format texte pour commentaire du fichier ===
-    mean_with_bad_str = num2str(mean_with_bad(1), '%.2f');
-    mean_no_bad_str   = num2str(signal_avg(1), '%.2f');
-
-    fprintf('[%s] Mean with bad: %.4f | Mean without bad: %.4f\n', sInputs(iInput).FileName, mean_with_bad(1), signal_avg(1));
-
-    % Save time-series data
-    sDataOut = db_template('data');
-    sDataOut.F            = signal_avg';
-    sDataOut.Comment = ['Mean (bad incl: ' mean_with_bad_str ', excl: ' mean_no_bad_str ')'];
-    sDataOut.ChannelFlag  = sDataIn.ChannelFlag;
-    sDataOut.Time         = [1];
-    sDataOut.History      = sDataIn.History;
-    sDataOut.DataType     = 'recordings';
-    sDataOut.nAvg         = 1;
-    sDataOut.DisplayUnits = sDataIn.DisplayUnits;
-    
-    % Generate a new file name in the same folder
-    sStudy = bst_get('Study', sInputs(iInput).iStudy);
-    OutputFile = bst_process('GetNewFilename', bst_fileparts(sStudy.FileName), 'data_mavg');
-    sDataOut.FileName = file_short(OutputFile);
-    bst_save(OutputFile, sDataOut, 'v7');
-    
-    % Register in database
-    db_add_data(sInputs(iInput).iStudy, OutputFile, sDataOut);
-    OutputFiles{iInput} = OutputFile;
-
 end
+
+A = zeros(size(sInput.A, 1), 1);
+operation = GetFileTag(sProcess);
+for ichan=1:nb_channels
+    channel_data = sInput.A(ichan, time_mask(ichan, :), :);
+    nb_samples = length(channel_data);
+    low = round(sProcess.options.pct_filter_range.Value{1}(1)/100 * nb_samples);
+    high = round(sProcess.options.pct_filter_range.Value{1}(2)/100 * nb_samples);
+    sorted_data = sort(channel_data);
+    channel_data = sorted_data(low:high);
+    if any(isnan(channel_data))
+        warning('Nan value(s) in filtered data of channel "%s"\n', channel_names{ichan})
+    end
+    % Apply function
+    switch operation
+        case 'mean'
+            result = mean(channel_data, 2);
+        case 'rms'
+            result = sqrt(sum(channel_data.^2, 2) / length(channel_data));
+        case 'std'
+            result = sqrt(var(channel_data, 0, 2));
+        case 'median'
+            result = median(channel_data, 2);
+    end
+    if any(isnan(result))
+        warning('Nan value(s) in computation of %s for channel "%s"\n', operation, channel_names{ichan})
+    end
+    A(ichan, :, :) = result;
+end
+% Copy values to represent the time window
+sInput.A = [A, A];
+% Keep only first and last time values
+
+if (length(sInput.TimeVector) > 2)
+    sInput.TimeVector = sInput.TimeVector(1) + [0, sInput.TimeVector(2)-sInput.TimeVector(1)];
+else
+    sInput.TimeVector = sInput.TimeVector(1) + [0, 1e-6];
+end
+
+% Build file tag
+sInput.CommentTag = [GetFileTag(sProcess) '(' process_extract_time('GetTimeString',sProcess,sInput) ')'];
+% Do not keep the Std/TFmask fields in the output
+if isfield(sInput, 'Std') && ~isempty(sInput.Std)
+    sInput.Std = [];
+end
+if isfield(sInput, 'TFmask') && ~isempty(sInput.TFmask)
+    sInput.TFmask = [];
+end
+
 end
 
 
