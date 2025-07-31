@@ -1,4 +1,4 @@
-function varargout = process_psa_pulsatility( varargin )
+ function varargout = process_psa_pulsatility( varargin )
 
 % @=============================================================================
 % This software is part of the Brainstorm software:
@@ -28,7 +28,7 @@ end
 function sProcess = GetDescription() %#ok<DEFNU>
 % Description the process
 %TOCHECK: how do we limit the input file types (only NIRS data)?
-sProcess.Comment     = 'Moving average';
+sProcess.Comment     = 'Pulsatility';
 sProcess.FileTag     = 'movmean';
 sProcess.Category    = 'File';
 sProcess.SubGroup    = 'Pre-process';
@@ -85,13 +85,9 @@ for iInput=1:length(sInputs)
     
     ievent = strcmp(sProcess.options.heart_beat_event.Value, ...
                     {events.label});
-    %TODO ici ittéré sur les channel
-    %[pulsatility, pulsatility_time] = apply_on_epochs(signal, sDataIn.Time, events(ievent).times(1,:),@pulsatility);
-    % puslatility_full = interp1(time, epoch_signal, sDataIn.Time);
-    
+    %Ittération sur les channels | OLD_version{[pulsatility, pulsatility_time] = apply_on_epochs(signal, sDataIn.Time, events(ievent).times(1,:),@pulsatility); puslatility_full = interp1(time, epoch_signal, sDataIn.Time);}
     nb_selected_chans = sum(chan_mask);
     pulsatility = zeros(length(events(ievent).times(1,:)) - 1, nb_selected_chans);
-   
     chan_indices = find(chan_mask);
     for iChan = 1:nb_selected_chans
         sig_chan = sDataIn.F(chan_indices(iChan), :)';  % signal 1D pour le canal i
@@ -146,8 +142,8 @@ end
 end
 
 function [pulsatility_value, time] = pulsatility(heart_beat_signal, heart_beat_time)
-    [systolic_peak, i_sys_peak] = max(heart_beat_signal);
-    diastolic_peak = min(heart_beat_signal(i_sys_peak:end, :));
-    pulsatility_value = (systolic_peak - diastolic_peak) ./ diastolic_peak;
+    systolic_peak = max(heart_beat_signal);
+    diastolic_peak = min(heart_beat_signal);
+    pulsatility_value = abs(systolic_peak - diastolic_peak) ./ systolic_peak;
     time = heart_beat_time(1) + (heart_beat_time(end) - heart_beat_time(1)) / 2;
 end
