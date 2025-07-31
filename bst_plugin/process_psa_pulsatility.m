@@ -1,4 +1,4 @@
- function varargout = process_psa_pulsatility( varargin )
+function varargout = process_psa_pulsatility( varargin )
 
 % @=============================================================================
 % This software is part of the Brainstorm software:
@@ -29,7 +29,7 @@ function sProcess = GetDescription() %#ok<DEFNU>
 % Description the process
 %TOCHECK: how do we limit the input file types (only NIRS data)?
 sProcess.Comment     = 'Pulsatility';
-sProcess.FileTag     = 'movmean';
+sProcess.FileTag     = 'pulsatility';
 sProcess.Category    = 'File';
 sProcess.SubGroup    = 'Pre-process';
 sProcess.Index       = 1305; %0: not shown, >0: defines place in the list of processes
@@ -85,7 +85,7 @@ for iInput=1:length(sInputs)
     
     ievent = strcmp(sProcess.options.heart_beat_event.Value, ...
                     {events.label});
-    %Ittération sur les channels | OLD_version{[pulsatility, pulsatility_time] = apply_on_epochs(signal, sDataIn.Time, events(ievent).times(1,:),@pulsatility); puslatility_full = interp1(time, epoch_signal, sDataIn.Time);}
+
     nb_selected_chans = sum(chan_mask);
     pulsatility = zeros(length(events(ievent).times(1,:)) - 1, nb_selected_chans);
     chan_indices = find(chan_mask);
