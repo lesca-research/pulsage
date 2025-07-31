@@ -357,7 +357,6 @@ for iacq=1:length(acq_defs)
             for igap=1:length(options.gaps)
                 gap_ichannel = find(~cellfun(@isempty, regexp(channel_labels, options.gaps(igap).channel_label)));
                 if isempty(gap_ichannel)
-                    
                     error('No channel matching %s for gap filling', options.gaps(igap).channel_label);
                 end
                 fgap_item = [acq_name '/' proc_folder '/' prefix options.gaps(igap).event_label '_filled' ];
@@ -417,7 +416,7 @@ for iacq=1:length(acq_defs)
                 delete(export_tmp_fn);
             end
         end
-       
+
         tfa_item = [acq_name '/' proc_folder '/' prefix 'TFA' ];
         [sFile_tfa, redone] = nst_run_bst_proc(tfa_item, 0, ...
                                                 'process_psa_tfa', sFile_mov_avg, [], ...
@@ -457,7 +456,6 @@ for iacq=1:length(acq_defs)
 
             if isempty(corr_tcd_idx_chan)
                 if MatFlag.ChannelFlag(cfbi_idx_chans(i_tcd_chan)) == 1
-                    continue
                     error('TCD channel %s not found in correlation matrix for Mx computation', tcd_chan_label);
                 else
                     continue

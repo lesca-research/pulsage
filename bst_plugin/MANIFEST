@@ -8,4 +8,4 @@ process_psa_tfa.m
 process_psa_mx.m
 process_psa_pulsatility.m
 process_psa_swap_channels.m
-process_psa_average_ignoring_bad.m
+process_psa_average_time_robust.m

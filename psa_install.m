@@ -1,5 +1,4 @@
 function psa_install(mode, extra)
-%psa_install('link')
 %PSA_INSTALL Installation of Pulsage plugin for Brainstorm (linux and windows).
 %   PSA_INSTALL(MODE) install Pulsage processes to brainstorm user folder:
 %     - linux: $HOME/.brainstorm/process
