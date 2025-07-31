@@ -504,7 +504,7 @@ for iacq=1:length(acq_defs)
             % pour chaque canal CBFi valide (non marqué "bad") dans le fichier Brainstorm correspondant.
             % Les résultats sont stockés dans les structures ar_indices et pulsatility_indices pour export ultérieur.
             [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( sFile_puls, cfbi_idx_chans, channel_labels, ar_indices, ...
-                                                    pulsatility_indices, i_ar_index, subject_tag, suffix);
+                                                    pulsatility_indices, i_ar_index, subject_tag, suffix,options);
             
         end
     end % end of loop over conditions (eg rest, stand)
@@ -526,8 +526,10 @@ if ~options.do_preproc_only
         writetable(pulsatility_table, pulsatility_table_fn, 'WriteRowNames', true, ...
                   'Delimiter', 'tab', ...
                   'FileType', 'text');
-        % Génère le graphique à barres groupées à partir du fichier .tsv
-        plot_grouped_pulsatility_avg(pulsatility_table_fn);
+        
+        if options.make_figs_general % Génère le graphique à barres groupées à partir du fichier .tsv
+            plot_grouped_pulsatility_avg(pulsatility_table_fn);
+        end
     end
 end
 end
@@ -630,10 +632,12 @@ options.deglitch.do = 0;
 options.deglitch.redo = 0;
 options.deglitch.agrad_std_factor = 2.5;
 
-options.make_figs = 1;
+%fig OPTIONS
+options.make_figs_general = 1;    % % Génère le graphique à barres groupées à partir du fichier .tsv
+options.make_figs_individual = 1; % For generating individual subject graphs
 options.save_fig_method = 'saveas'; % 'saveas', 'export_fig'
 options.export_fig_dpi = 90;
-options.fig_dir = '';
+options.fig_dir = ''; % the directory where 'pulsatility_figures' will be generated (default in data_analysis)
 options.fig_background = []; % use default background
 
 end
@@ -1056,7 +1060,7 @@ end
 
 function [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( ...
     sFile_puls, cfbi_idx_chans, channel_labels, ar_indices, pulsatility_indices, ...
-    i_ar_index, subject_tag, suffix)
+    i_ar_index, subject_tag, suffix,options)
 
     puls_data = in_bst(sFile_puls, [], 1, 1);   % Charge les données de pulsatility en ignore bad segments
     
@@ -1138,41 +1142,46 @@ function [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( ..
         pulsatility_indices(i_ar_index).([base_label '_min']) = str_min;
         pulsatility_indices(i_ar_index).([base_label '_max']) = str_max;
         pulsatility_indices(i_ar_index).([base_label '_std']) = pi_std;
-
-        %Two plot
         
-       
-        base_fig_dir = fullfile(fileparts(pwd), 'data_analysis', 'pulsatility_figures');
-
-        % Génère un tag unique à partir du nom de fichier complet
-        [~, sFileBase, ~] = fileparts(sFile_puls);
-        safe_tag = protect_fn_str(sFileBase);  % Nettoie le nom pour l'utiliser dans un dossier
-        
-        % Utilise un sous-dossier unique pour éviter les collisions
-        fig_folder = fullfile(base_fig_dir, [subject_tag '__' safe_tag]);
-        
-        if ~exist(fig_folder, 'dir')
-            mkdir(fig_folder);
+        if options.make_figs_individual
+            %Two plot
+            
+            if isempty(options.fig_dir)
+                base_fig_dir = fullfile(fileparts(pwd), 'data_analysis', 'pulsatility_figures');
+            else
+                base_fig_dir = fullfile(options.fig_dir, 'pulsatility_figures');
+            end
+    
+    
+            % Génère un tag unique à partir du nom de fichier complet
+            [~, sFileBase, ~] = fileparts(sFile_puls);
+            safe_tag = protect_fn_str(sFileBase);  % Nettoie le nom pour l'utiliser dans un dossier
+            
+            % Utilise un sous-dossier unique pour éviter les collisions
+            fig_folder = fullfile(base_fig_dir, [subject_tag '__' safe_tag]);
+            
+            if ~exist(fig_folder, 'dir')
+                mkdir(fig_folder);
+            end
+    
+    
+            %disp(['Pulsatility file generated: ', sFile_puls]);
+            f1 = figure('Visible', 'off');
+            boxplot(pi_values);
+            title(['Boxplot of PI - ' chan_label suffix]);
+            ylabel('Pulsatility Index');
+            xlabel('Channel');
+            saveas(f1, fullfile(fig_folder, ['boxplot_' chan_label suffix '.png']));
+            close(f1);
+            
+            f2 = figure('Visible', 'off');
+            histfit(pi_values, 30);  % Gaussian fit
+            title(['Histogram + Fit - ' chan_label suffix]);
+            xlabel('Pulsatility Index');
+            ylabel('Frequency');
+            saveas(f2, fullfile(fig_folder, ['histfit_' chan_label suffix '.png']));
+            close(f2);
         end
-
-
-        %disp(['Pulsatility file generated: ', sFile_puls]);
-        f1 = figure('Visible', 'off');
-        boxplot(pi_values);
-        title(['Boxplot of PI - ' chan_label suffix]);
-        ylabel('Pulsatility Index');
-        xlabel('Channel');
-        saveas(f1, fullfile(fig_folder, ['boxplot_' chan_label suffix '.png']));
-        close(f1);
-        
-        f2 = figure('Visible', 'off');
-        histfit(pi_values, 30);  % Gaussian fit
-        title(['Histogram + Fit - ' chan_label suffix]);
-        xlabel('Pulsatility Index');
-        ylabel('Frequency');
-        saveas(f2, fullfile(fig_folder, ['histfit_' chan_label suffix '.png']));
-        close(f2);
-
     end
 end
 
@@ -1207,6 +1216,7 @@ function plot_grouped_pulsatility_avg(tsv_path)
             errorbar(x, avg_data(:,i),std_data(:,i), '.', 'Color', [0.5 0.5 0.5], 'LineWidth', 0.5, 'CapSize', 3); %errorbar(x, avg_data(:, i), std_data(:, i), 'k.', 'LineWidth', 1);
         end
     end
+    
     title('Pulsatility Index - Moyennes avec écarts-types');
     ylabel('Pulsatility Index moyen');
     xticks(1:nGroups);
@@ -1219,7 +1229,5 @@ function plot_grouped_pulsatility_avg(tsv_path)
     fig_path = fullfile(fileparts(pwd), 'data_analysis', 'grouped_pulsatility_avg.png');
     saveas(gcf, fig_path);
     close(gcf);
-    %disp(['Graphique enregistré ici : ' fig_path]);
-
 end
 
