@@ -820,9 +820,15 @@ for iFile=1:length(sFiles)
     marking_fn = fullfile(marking_dir, protect_fn_str([subject_name '--' condition_label '--' item_label ...
                                                        '_' marking_fn_suffix '.mat']));
     if ~exist(marking_fn, 'file')
+        if strcmp(mode, 'load_all')
+            warning('Marking file not found: %s', marking_fn);
+        end
         export_modification_date = 0;
     else
+        warning off MATLAB:load:variableNotFound
         sMDate = load(marking_fn, 'modification_date');
+        warning on MATLAB:load:variableNotFound
+
         if isempty(fieldnames(sMDate))
             export_modification_date = 0;
         else
@@ -837,8 +843,7 @@ for iFile=1:length(sFiles)
             save(marking_fn, 'local_modification_date', '-append');
         end
     elseif strcmp(mode, 'load_all') || (strcmp(mode, 'sync') && local_modification_date < export_modification_date)
-        fprintf('Import markings from %s to %s\n', ...
-                marking_fn, file_fn);
+        fprintf('Import markings from %s to %s\n', marking_fn, file_fn);
         if ~dry
             import_marking_func(file_fn, marking_fn, io_options);
         end
