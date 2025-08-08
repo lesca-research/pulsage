@@ -9,3 +9,5 @@ process_psa_mx.m
 process_psa_pulsatility.m
 process_psa_swap_channels.m
 process_psa_average_time_robust.m
+psa_ppl_SIMULT_autoreg_V1.m
+psa_ppl_nirs_autoreg_V1.m

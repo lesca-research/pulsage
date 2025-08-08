@@ -198,7 +198,7 @@ switch action
                                     'UniformOutput', false), '\n')));
         end
         files_chan_fix = files_chan_fix(~missing_chan_fix);
-
+        
 
 
         %preproc saving duplicate it for the two preproc folders
@@ -329,21 +329,12 @@ for iacq=1:length(acq_defs)
     sChannel = bst_get('ChannelForStudy', iStudy);
     channels = in_bst_channel(sChannel.FileName);
     channel_labels = {
-    'S1D1WL756', 'S3D1WL756', 'S4D1WL756', 'S3D2WL756', 'S4D2WL756', ...
-    'S5D2WL756', 'S4D3WL756', 'S5D3WL756', 'S6D3WL756', 'S5D4WL756', ...
-    'S6D4WL756', 'S7D4WL756', 'S6D5WL756', 'S7D5WL756', 'S8D5WL756', ...
-    'S7D6WL756', 'S8D6WL756', 'S9D6WL756', 'S8D7WL756', 'S9D7WL756', ...
-    'S11D7WL756', 'S2D8WL756', 'S10D9WL756', 'S1D1WL853', 'S3D1WL853', ...
-    'S4D1WL853', 'S3D2WL853', 'S4D2WL853', 'S5D2WL853', 'S4D3WL853', ...
-    'S5D3WL853', 'S6D3WL853', 'S5D4WL853', 'S6D4WL853', 'S7D4WL853', ...
-    'S6D5WL853', 'S7D5WL853', 'S8D5WL853', 'S7D6WL853', 'S8D6WL853', ...
-    'S9D6WL853', 'S8D7WL853', 'S9D7WL853', 'S11D7WL853', 'S2D8WL853', ...
-    'S10D9WL853'
+    'S1D1WL756', 'S3D1WL756', 'S4D1WL756', 'S3D2WL756', 'S4D2WL756', 'S5D2WL756', 'S4D3WL756', 'S5D3WL756', 'S6D3WL756', 'S5D4WL756', 'S6D4WL756', 'S7D4WL756', 'S6D5WL756', 'S7D5WL756', 'S8D5WL756', 'S7D6WL756', 'S8D6WL756', 'S9D6WL756', 'S8D7WL756', 'S9D7WL756', 'S11D7WL756', 'S2D8WL756', 'S10D9WL756', 'S1D1WL853', 'S3D1WL853', 'S4D1WL853', 'S3D2WL853', 'S4D2WL853', 'S5D2WL853', 'S4D3WL853', 'S5D3WL853', 'S6D3WL853', 'S5D4WL853', 'S6D4WL853', 'S7D4WL853', 'S6D5WL853', 'S7D5WL853', 'S8D5WL853', 'S7D6WL853', 'S8D6WL853', 'S9D6WL853', 'S8D7WL853', 'S9D7WL853', 'S11D7WL853', 'S2D8WL853', 'S10D9WL853'
     };
- %not sure if I should run the pipeline for both lamda
-% or =opts.psa.CBFi_channel_labels
-% 
-    
+    %not sure if I should run the pipeline for both lamda
+    % or =opts.psa.CBFi_channel_labels
+    % 
+        
 
 
     disp('Tous les canaux disponibles dans le fichier :');
@@ -384,9 +375,6 @@ for iacq=1:length(acq_defs)
                            options.heart_beats.event_name);
     end
 
-    if options.do_preproc_only
-        continue
-    end
     
     
 
@@ -461,10 +449,44 @@ for iacq=1:length(acq_defs)
                                             sFile_labchart_hb, file_nirs_moco, ...
                                             'src',  'CMT oxysoft sync', ...
                                             'dest', 'Z');
-
     
+    % Définir la liste des événements à supprimer
+    event_to_delete_list = { ...
+        'sync CMT standing_start', ...
+        'sync CMT rest_end', ...
+        'standup', ...
+        'CMT standing_start', ...
+        'CMT rest_end',...
+        'sync CMT rest_start',...
+        'sync CMT standing_end',...
+        'CMT standing',...
+        };
     
-    continue
+    % Extraire tous les noms d'événements uniques (directs et avec "sync ")
+    event_labels_from_events = {events.label};
+    event_labels_with_sync = cellstr("sync " + string(event_labels_from_events));  % Corrigé
+    all_event_labels = unique([event_labels_nirs, event_labels_from_events, event_labels_with_sync]);
+    
+    % Identifier ceux à supprimer
+    events_found = intersect(event_to_delete_list, all_event_labels);
+    
+    % Supprimer les événements trouvés
+    if ~isempty(events_found)
+        for iDel = 1:length(events_found)
+           
+            file_nirs_proc = bst_process('CallProcess', 'process_evt_delete', file_nirs_proc, [], ...
+                                    'eventname', events_found{iDel});
+            %evt_sync_item = [acq_name '/' 'preproc_nirs__psanar_V1' '/Events_uploaded'];
+            % [file_nirs_proc, ~] = nst_run_bst_proc(evt_sync_item, 0, ...
+            %     'process_evt_delete', file_nirs_moco, [], ...
+            %     'eventname', events_found{iDel});
+            fprintf('Événement "%s" supprimé de %s\n', events_found{iDel}, acq_name);
+        end
+    end
+    
+    if options.do_preproc_only
+        continue
+    end
     
     sFiles_cond = {};
     prefixes = {};
@@ -665,6 +687,14 @@ if ~options.do_preproc_only
         %plot_grouped_pulsatility_avg(pulsatility_table_fn);
     end
 end
+
+% GROUP analysis
+
+% Load TCD results
+
+% Correlation between NIRS pulsatility and TCD results for every channel
+% Save as brainstorm data
+
 end
 
 
@@ -828,7 +858,7 @@ end
 
 function sync_markings(sFiles, options, sync_mode)
 
-io_options.events_to_sync = [options.conditions {options.gaps.event_label, options.heart_beats.event_name}];
+io_options.events_to_sync = [options.conditions {options.gaps.event_label, options.heart_beats.event_name, 'sync rest', 'sync stand', 'sync cardiac'} ];
 
 if strcmp(sync_mode, 'load_all') 
     bst_process('CallProcess', 'process_evt_delete', sFiles, [], ...
