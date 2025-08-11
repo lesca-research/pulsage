@@ -129,7 +129,8 @@ end
 function [values, times] = apply_on_epochs(signal, signal_time, epoch_times, func)
 
 sampling_freq = 1 ./ diff(signal_time(1:2));
-epoch_samples = round(epoch_times .* sampling_freq);
+epoch_samples = round((epoch_times-signal_time(1)) .* sampling_freq) + 1;
+
 values = zeros(length(epoch_samples)-1, size(signal,2));
 times = zeros(1, length(epoch_samples)-1);
 for iepoch=1:(length(epoch_samples)-1)
