@@ -129,7 +129,8 @@ end
 function [values, times] = apply_on_epochs(signal, signal_time, epoch_times, func)
 
 sampling_freq = 1 ./ diff(signal_time(1:2));
-epoch_samples = round(epoch_times .* sampling_freq);
+epoch_samples = round((epoch_times-signal_time(1)) .* sampling_freq) + 1;
+
 values = zeros(length(epoch_samples)-1, size(signal,2));
 times = zeros(1, length(epoch_samples)-1);
 for iepoch=1:(length(epoch_samples)-1)
@@ -144,6 +145,7 @@ end
 function [pulsatility_value, time] = pulsatility(heart_beat_signal, heart_beat_time)
     systolic_peak = max(heart_beat_signal);
     diastolic_peak = min(heart_beat_signal);
-    pulsatility_value = abs(systolic_peak - diastolic_peak) ./ systolic_peak;
+    % resistance index: systolic_peak - diastolic_peak ./ systolic_peak
+    pulsatility_value = (systolic_peak - diastolic_peak) ./ mean(heart_beat_signal);
     time = heart_beat_time(1) + (heart_beat_time(end) - heart_beat_time(1)) / 2;
 end
