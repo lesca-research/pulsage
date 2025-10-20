@@ -47,9 +47,9 @@ sProcess.options.pct_filter_range.Comment = 'Percentile filter range (percent):'
 sProcess.options.pct_filter_range.Type    = 'range';
 sProcess.options.pct_filter_range.Value   = {[2.5 97.5], '%', 1};
 
-sProcess.options.discard_bad_events.Comment = 'Use bad_ events to discard segments';
-sProcess.options.discard_bad_events.Type       = 'checkbox';
-sProcess.options.discard_bad_events.Value      = 0;
+sProcess.options.use_bad_events.Comment = 'Use bad_ events to discard segments';
+sProcess.options.use_bad_events.Type       = 'checkbox';
+sProcess.options.use_bad_events.Value      = 0;
 
 % === FUNCTION
 sProcess.options.label2.Comment = '<U><B>Function</B></U>:';
@@ -97,7 +97,7 @@ if ~ismatrix(sInput.A)
 end
 
 % Filter bad segments
-if sProcess.options.discard_bad_events.Value
+if sProcess.options.use_bad_events.Value
     sEvents = in_bst_data(sInput.FileName, 'Events');
     bad_idx_events = find(~cellfun(@isempty, regexpi({sEvents.Events.label}, ['bad_.*'])));
     if ~isempty(bad_idx_events)
@@ -124,6 +124,7 @@ for ichan=1:nb_channels
     channel_data = sInput.A(ichan, time_mask(ichan, :), :);
     time = sInput.TimeVector(time_mask(ichan, :));
     nb_samples = length(channel_data);
+    
     low = round(sProcess.options.pct_filter_range.Value{1}(1)/100 * nb_samples);
     high = round(sProcess.options.pct_filter_range.Value{1}(2)/100 * nb_samples);
     [sorted_data, sort_idx] = sort(channel_data);
