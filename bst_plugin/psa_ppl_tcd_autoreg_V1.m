@@ -133,7 +133,7 @@ switch action
                 error('Cannot find current protocol');
             end
             sSubjects = GlobalData.DataBase.ProtocolSubjects(GlobalData.DataBase.iProtocol);
-            subject_names = {sSubjects.Subject.Name};
+            subject_names = ignore_forged_subjects({sSubjects.Subject.Name});
         end
 
         if nargin >= 4
@@ -585,6 +585,11 @@ end
 
 end
 
+function subject_names = ignore_forged_subjects(subject_names)
+ignore_subjects = {get_full_head_model_subject_name(), 'Group_analysis'};
+subject_names = subject_names(~ismember(subject_names, ignore_subjects));
+end
+
 
 function options = get_options()
 % Return default pipeline options
@@ -613,6 +618,8 @@ options.export_dir_channel_flags = ''; % Where to export channel tags (mirroring
                                        % -> will be reimported everytime reimportation
                                        %    is needed.
 options.export_dir_preprocessed = '';
+
+% options.cbf_channel_pattern = 'TCD';
 
 options.do_preproc_only = 0;
 
