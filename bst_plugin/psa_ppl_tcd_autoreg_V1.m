@@ -116,41 +116,22 @@ switch action
         end
         create_dirs(options);
         [imported_files, redone] = import_tcd_files(acqs_info, options);
-        if options.import.load_markings
-            % TODO properly handle timestamp to avoid overwriting when syncing after fresh import 
-            %psa_ppl_tcd_autoreg_V1('sync_markings', options, {acqs_info(redone==1).acq_name}, 'load_all');
-        end
         varargout{1} = imported_files;
         varargout{2} = redone;
         return;
     case 'sync_markings'
-        if nargin >= 3
-            subject_names = arg1;
-        else
-            % Get all subjects in current protocol (ignore Group_analysis
-            % and subject holding full head model)
-            if isempty(GlobalData.DataBase.iProtocol) || (GlobalData.DataBase.iProtocol == 0)
-                error('Cannot find current protocol');
-            end
-            sSubjects = GlobalData.DataBase.ProtocolSubjects(GlobalData.DataBase.iProtocol);
-            subject_names = ignore_forged_subjects({sSubjects.Subject.Name});
-        end
-
-        if nargin >= 4
-            sync_mode = arg2;
-        else
-            sync_mode = 'sync';
-        end
+        subject_names = {arg1.acq_name};
+        sync_mode = arg2;
+        
         orig_cond = ['origin' get_ppl_tag()];
         files_raw = cellfun(@(s)  nst_get_bst_func_files(s, orig_cond , 'Raw'), ...
                            subject_names, 'UniformOutput', false);
         missing_raw = cellfun(@isempty, files_raw);
         if any(missing_raw)
-            warning(sprintf('Missing Raw data files for subjects (will be ignored):\n%s\n', ...
-                            strjoin(cellfun(@(s) sprintf(' - %s', s), subject_names(missing_raw), ...
-                                    'UniformOutput', false), '\n')));
+            error('Missing Raw data files for subjects :\n%s\n', ...
+                    strjoin(cellfun(@(s) sprintf(' - %s', s), subject_names(missing_raw), ...
+                            'UniformOutput', false), '\n'));
         end
-        files_raw = files_raw(~missing_raw);
 
         preproc_cond = ['preproc_' get_ppl_tag()];
         files_chan_fix = cellfun(@(s)  nst_get_bst_func_files(s, preproc_cond , 'Raw_Chan_Fix'), ...
@@ -168,6 +149,9 @@ switch action
         create_dirs(options);
         sync_markings(files_to_sync, options, sync_mode);
         varargout{1} = files_to_sync;
+        return;
+    case 'preprocessing'
+        preprocessing(arg1, options);
         return;
     case 'analyse'
     otherwise
@@ -204,7 +188,6 @@ end
 proc_folder = sprintf('proc_%s', get_ppl_tag());
 preproc_folder = sprintf('preproc_%s', get_ppl_tag());
 
-
 BP_channel_label = options.BP_channel_label;
 CBFi_channel_labels = options.CBFi_channel_labels;
 
@@ -238,30 +221,33 @@ for i_cbfi_chan=1:length(CBFi_channel_labels)
     end
 end
 
+
+preproc_folder = sprintf('preproc_%s', get_ppl_tag());
+
 for iacq=1:length(acq_defs)
     acq_name = acq_defs(iacq).acq_name;
     subject_tag = acq_defs(iacq).subject_tag;
 
     fprintf('Processing %s\n', acq_name);
 
-    file_raw = nst_get_bst_func_files(acq_name, ['origin' get_ppl_tag()], 'Raw');
-    if isempty(file_raw)
-        warning('Cannot find "origin/Raw" data for "%s".', acq_name);
+    sFile_chan_fix = nst_get_bst_func_files(acq_name, preproc_folder, 'Raw_Chan_Fix');
+    if isempty(sFile_chan_fix)
+        warning('Cannot find "preproc/Raw_Chan_Fix" data for "%s".', acq_name);
         continue;
-    elseif iscell(file_raw) && length(file_raw) > 1
-        warning('Expect only 1 raw file "origin/Raw", but %d found for "%s".',  ...
+    elseif iscell(sFile_chan_fix) && length(file_raw) > 1
+        warning('Expect only 1 raw file "preproc/Raw_Chan_Fix", but %d found for "%s".',  ...
             length(file_raw), acq_name);
         continue;
     end
 
-    if iscell(file_raw)
-        file_raw = file_raw{1};
+    if iscell(sFile_chan_fix)
+        sFile_chan_fix = sFile_chan_fix{1};
     end
         
-    data_tmp = in_bst_data(file_raw, 'Events');
+    data_tmp = in_bst_data(sFile_chan_fix, 'Events');
     events = data_tmp.Events;
 
-    [~, iStudy] = bst_get('AnyFile', file_raw);
+    [~, iStudy] = bst_get('AnyFile', sFile_chan_fix);
     sChannel = bst_get('ChannelForStudy', iStudy);
     channels = in_bst_channel(sChannel.FileName);
     channel_labels = {channels.Channel.Name};
@@ -282,29 +268,6 @@ for iacq=1:length(acq_defs)
         end
     end
         
-    chan_fix_item = [acq_name '/' preproc_folder '/Raw_Chan_Fix' ];
-    if isfield(acq_defs, 'channels_to_swap') && ~isempty(acq_defs(iacq).channels_to_swap)
-        [sFile_chan_fix, redone] = nst_run_bst_proc(chan_fix_item, 0, ...
-                                                    'process_psa_swap_channels', file_raw, [], ...
-                                                    'channelname_1',   acq_defs(iacq).channels_to_swap{1}, ...
-                                                    'channelname_2',   acq_defs(iacq).channels_to_swap{2});
-    else
-        [sFile_chan_fix, redone] = nst_run_bst_proc(chan_fix_item, 0, ...
-                                                    'process_duplicate', file_raw, [], ...
-                                                    'target', 1, ...  % Duplicate data files
-                                                    'tag',    '_copy');
-    end
-
-    if options.heart_beats.do
-        detect_heart_beats(sFile_chan_fix, ...
-                           options.heart_beats.ecg_channel_labels, ...
-                           options.heart_beats.event_name);
-    end
-
-    if options.do_preproc_only
-        continue
-    end
-
     sFiles_cond = {};
     prefixes = {};
     suffixes = {};
@@ -548,7 +511,48 @@ if ~options.do_preproc_only
 end
 end
 
+function preprocessing(acq_defs, options)
 
+for iacq=1:length(acq_defs)
+    acq_name = acq_defs(iacq).acq_name;
+
+    fprintf('Preprocessing %s\n', acq_name);
+
+    file_raw = nst_get_bst_func_files(acq_name, ['origin' get_ppl_tag()], 'Raw');
+    if isempty(file_raw)
+        warning('Cannot find "origin/Raw" data for "%s".', acq_name);
+        continue;
+    elseif iscell(file_raw) && length(file_raw) > 1
+        warning('Expect only 1 raw file "origin/Raw", but %d found for "%s".',  ...
+            length(file_raw), acq_name);
+        continue;
+    end
+
+    if iscell(file_raw)
+        file_raw = file_raw{1};
+    end
+
+    preproc_folder = sprintf('preproc_%s', get_ppl_tag());
+
+    chan_fix_item = [acq_name '/' preproc_folder '/Raw_Chan_Fix' ];
+    if isfield(acq_defs, 'channels_to_swap') && ~isempty(acq_defs(iacq).channels_to_swap)
+        [sFile_chan_fix, redone] = nst_run_bst_proc(chan_fix_item, 0, ...
+                                                    'process_psa_swap_channels', file_raw, [], ...
+                                                    'channelname_1',   acq_defs(iacq).channels_to_swap{1}, ...
+                                                    'channelname_2',   acq_defs(iacq).channels_to_swap{2});
+    else
+        [sFile_chan_fix, redone] = nst_run_bst_proc(chan_fix_item, 0, ...
+                                                    'process_duplicate', file_raw, [], ...
+                                                    'target', 1, ...  % Duplicate data files
+                                                    'tag',    '_copy');
+    end
+
+    detect_heart_beats(sFile_chan_fix, ...
+                       options.heart_beats.ecg_channel_labels, ...
+                       options.heart_beats.event_name);
+end
+
+end
 
 function detect_heart_beats(sFile, ecg_channel_labels, heart_beat_event_name)
 sEvents = in_bst_data(sFile, 'Events');
@@ -816,47 +820,28 @@ end
 
 function sync_markings_logic(sFiles, import_marking_func, export_marking_func, io_options, marking_fn_suffix, marking_dir, dry, mode)
 
-assert(ismember(mode, {'sync', 'export_all', 'load_all'}));
+assert(ismember(mode, {'export_all', 'load_all'}));
 
 for iFile=1:length(sFiles)
     file_fn = file_fullpath(sFiles{iFile});
-    file_obj = dir(file_fn);
-    local_modification_date = file_obj.date;
 
     [subject_name, condition_label, item_label] = bst_file_info(file_fn);
     marking_fn = fullfile(marking_dir, protect_fn_str([subject_name '--' condition_label '--' item_label ...
                                                        '_' marking_fn_suffix '.mat']));
-    if ~exist(marking_fn, 'file')
-        if strcmp(mode, 'load_all')
-            warning('Marking file not found: %s', marking_fn);
-        end
-        export_modification_date = 0;
-    else
-        warning off MATLAB:load:variableNotFound
-        sMDate = load(marking_fn, 'modification_date');
-        warning on MATLAB:load:variableNotFound
 
-        if isempty(fieldnames(sMDate))
-            export_modification_date = 0;
-        else
-            export_modification_date = sMDate.modification_date;
-        end
-    end
-    if strcmp(mode, 'export_all') || (strcmp(mode, 'sync') && local_modification_date > export_modification_date)
+    if strcmp(mode, 'export_all') 
         fprintf('Export markings from %s to %s\n', ...
                 file_fn, marking_fn);
         if ~dry
             export_marking_func(file_fn, marking_fn, io_options);
-            save(marking_fn, 'local_modification_date', '-append');
         end
-    elseif strcmp(mode, 'load_all') || (strcmp(mode, 'sync') && local_modification_date < export_modification_date)
+    elseif strcmp(mode, 'load_all') 
         fprintf('Import markings from %s to %s\n', marking_fn, file_fn);
         if ~dry
             import_marking_func(file_fn, marking_fn, io_options);
         end
     else
-        fprintf('No markings sync: Local and export markings have the same date (%s - %s)\n', ...
-                marking_fn, file_fn);
+        error('Bad mode %s\n', mode);
     end
 end
 
