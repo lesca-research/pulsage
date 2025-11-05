@@ -116,41 +116,22 @@ switch action
         end
         create_dirs(options);
         [imported_files, redone] = import_tcd_files(acqs_info, options);
-        if options.import.load_markings
-            % TODO properly handle timestamp to avoid overwriting when syncing after fresh import 
-            %psa_ppl_tcd_autoreg_V1('sync_markings', options, {acqs_info(redone==1).acq_name}, 'load_all');
-        end
         varargout{1} = imported_files;
         varargout{2} = redone;
         return;
     case 'sync_markings'
-        if nargin >= 3
-            subject_names = arg1;
-        else
-            % Get all subjects in current protocol (ignore Group_analysis
-            % and subject holding full head model)
-            if isempty(GlobalData.DataBase.iProtocol) || (GlobalData.DataBase.iProtocol == 0)
-                error('Cannot find current protocol');
-            end
-            sSubjects = GlobalData.DataBase.ProtocolSubjects(GlobalData.DataBase.iProtocol);
-            subject_names = ignore_forged_subjects({sSubjects.Subject.Name});
-        end
-
-        if nargin >= 4
-            sync_mode = arg2;
-        else
-            sync_mode = 'sync';
-        end
+        subject_names = {arg1.acq_name};
+        sync_mode = arg2;
+        
         orig_cond = ['origin' get_ppl_tag()];
         files_raw = cellfun(@(s)  nst_get_bst_func_files(s, orig_cond , 'Raw'), ...
                            subject_names, 'UniformOutput', false);
         missing_raw = cellfun(@isempty, files_raw);
         if any(missing_raw)
-            warning(sprintf('Missing Raw data files for subjects (will be ignored):\n%s\n', ...
-                            strjoin(cellfun(@(s) sprintf(' - %s', s), subject_names(missing_raw), ...
-                                    'UniformOutput', false), '\n')));
+            error('Missing Raw data files for subjects :\n%s\n', ...
+                    strjoin(cellfun(@(s) sprintf(' - %s', s), subject_names(missing_raw), ...
+                            'UniformOutput', false), '\n'));
         end
-        files_raw = files_raw(~missing_raw);
 
         preproc_cond = ['preproc_' get_ppl_tag()];
         files_chan_fix = cellfun(@(s)  nst_get_bst_func_files(s, preproc_cond , 'Raw_Chan_Fix'), ...
@@ -168,6 +149,9 @@ switch action
         create_dirs(options);
         sync_markings(files_to_sync, options, sync_mode);
         varargout{1} = files_to_sync;
+        return;
+    case 'preprocessing'
+        preprocessing(arg1, options);
         return;
     case 'analyse'
     otherwise
@@ -204,7 +188,6 @@ end
 proc_folder = sprintf('proc_%s', get_ppl_tag());
 preproc_folder = sprintf('preproc_%s', get_ppl_tag());
 
-
 BP_channel_label = options.BP_channel_label;
 CBFi_channel_labels = options.CBFi_channel_labels;
 
@@ -217,9 +200,13 @@ if ~isempty(options.conditions)
 end
 
 tfa_index_labels = process_psa_tfa('tfa_index_labels');
-ar_index_labels = [{'AR_Mx_mova', 'AR_Mx_block'} tfa_index_labels];
+if options.pulsatility_az
+    pulsatility_index_labels = {'Pulsatility_avg', 'Pulsatility_std', 'Pulsatility_min', 'Pulsatility_max'};
+else
+    pulsatility_index_labels = {'Pulsatility'};
+end
+ar_index_labels = [{'AR_Mx_mova', 'AR_Mx_block'} tfa_index_labels pulsatility_index_labels];
 ar_indices = struct(); 
-pulsatility_indices = struct(); % for table
 ar_indices.Subject = '';
 for i_cbfi_chan=1:length(CBFi_channel_labels)
     cbfi_chan_label = CBFi_channel_labels{i_cbfi_chan};
@@ -227,12 +214,15 @@ for i_cbfi_chan=1:length(CBFi_channel_labels)
         ar_index_label = ar_index_labels{i_ar_index};
         for isuffix=1:length(ar_suffixes)
             ar_chan_index_label = protect_field_label([ar_index_label '_' ...
-                                                  cbfi_chan_label ...
-                                                  ar_suffixes{isuffix}]);
+                                                       cbfi_chan_label ...
+                                                       ar_suffixes{isuffix}]);
             ar_indices.(ar_chan_index_label) = nan;
         end
     end
 end
+
+
+preproc_folder = sprintf('preproc_%s', get_ppl_tag());
 
 for iacq=1:length(acq_defs)
     acq_name = acq_defs(iacq).acq_name;
@@ -240,24 +230,24 @@ for iacq=1:length(acq_defs)
 
     fprintf('Processing %s\n', acq_name);
 
-    file_raw = nst_get_bst_func_files(acq_name, ['origin' get_ppl_tag()], 'Raw');
-    if isempty(file_raw)
-        warning('Cannot find "origin/Raw" data for "%s".', acq_name);
+    sFile_chan_fix = nst_get_bst_func_files(acq_name, preproc_folder, 'Raw_Chan_Fix');
+    if isempty(sFile_chan_fix)
+        warning('Cannot find "preproc/Raw_Chan_Fix" data for "%s".', acq_name);
         continue;
-    elseif iscell(file_raw) && length(file_raw) > 1
-        warning('Expect only 1 raw file "origin/Raw", but %d found for "%s".',  ...
+    elseif iscell(sFile_chan_fix) && length(file_raw) > 1
+        warning('Expect only 1 raw file "preproc/Raw_Chan_Fix", but %d found for "%s".',  ...
             length(file_raw), acq_name);
         continue;
     end
 
-    if iscell(file_raw)
-        file_raw = file_raw{1};
+    if iscell(sFile_chan_fix)
+        sFile_chan_fix = sFile_chan_fix{1};
     end
         
-    data_tmp = in_bst_data(file_raw, 'Events');
+    data_tmp = in_bst_data(sFile_chan_fix, 'Events');
     events = data_tmp.Events;
 
-    [~, iStudy] = bst_get('AnyFile', file_raw);
+    [~, iStudy] = bst_get('AnyFile', sFile_chan_fix);
     sChannel = bst_get('ChannelForStudy', iStudy);
     channels = in_bst_channel(sChannel.FileName);
     channel_labels = {channels.Channel.Name};
@@ -278,29 +268,6 @@ for iacq=1:length(acq_defs)
         end
     end
         
-    chan_fix_item = [acq_name '/' preproc_folder '/Raw_Chan_Fix' ];
-    if isfield(acq_defs, 'channels_to_swap') && ~isempty(acq_defs(iacq).channels_to_swap)
-        [sFile_chan_fix, redone] = nst_run_bst_proc(chan_fix_item, 0, ...
-                                                    'process_psa_swap_channels', file_raw, [], ...
-                                                    'channelname_1',   acq_defs(iacq).channels_to_swap{1}, ...
-                                                    'channelname_2',   acq_defs(iacq).channels_to_swap{2});
-    else
-        [sFile_chan_fix, redone] = nst_run_bst_proc(chan_fix_item, 0, ...
-                                                    'process_duplicate', file_raw, [], ...
-                                                    'target', 1, ...  % Duplicate data files
-                                                    'tag',    '_copy');
-    end
-
-    if options.heart_beats.do
-        detect_heart_beats(sFile_chan_fix, ...
-                           options.heart_beats.ecg_channel_labels, ...
-                           options.heart_beats.event_name);
-    end
-
-    if options.do_preproc_only
-        continue
-    end
-
     sFiles_cond = {};
     prefixes = {};
     suffixes = {};
@@ -499,42 +466,93 @@ for iacq=1:length(acq_defs)
                                                     'avgwinoverlap', 50, ...
                                                     'scalarprod',    0, ...
                                                     'outputmode',    'input');  % separately for each file
-       
-            %Extrait les statistiques de l'indice de pulsatilité pour chaque canal valide
-            % pour chaque canal CBFi valide (non marqué "bad") dans le fichier Brainstorm correspondant.
-            % Les résultats sont stockés dans les structures ar_indices et pulsatility_indices pour export ultérieur.
-            [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( sFile_puls, cfbi_idx_chans, channel_labels, ar_indices, ...
-                                                    pulsatility_indices, i_ar_index, subject_tag, suffix,options);
-            
+            if options.pulsatility_az
+                %Extrait les statistiques de l'indice de pulsatilité pour chaque canal valide
+                % pour chaque canal CBFi valide (non marqué "bad") dans le fichier Brainstorm correspondant.
+                % Les résultats sont stockés dans les structures ar_indices et pulsatility_indices pour export ultérieur.
+                [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( sFile_puls, cfbi_idx_chans, channel_labels, ar_indices, ...
+                                                                                    pulsatility_indices, i_ar_index, subject_tag, suffix,options);
+            else
+                pulsatility_avg_item = [acq_name '/' proc_folder '/' prefix 'pulsatility_avg' ];
+                [sFile_puls_avg, redone] = nst_run_bst_proc(pulsatility_avg_item, 0, ...
+                                                            'process_psa_average_time_robust', sFile_puls, [], ...
+                                                            'pct_filter_range', [5, 95], ...
+                                                            'discard_bad_events',   1, ...
+                                                            'avg_func',         'mean', ...  % Arithmetic average:  mean(x)
+                                                            'overwrite',        0);
+    
+                pulsatility_avg_data = in_bst(sFile_puls_avg);
+
+                for chan_idx=cfbi_idx_chans
+                    if pulsatility_avg_data.ChannelFlag(chan_idx) == 1
+                        pi = pulsatility_avg_data.F(chan_idx, 1);
+                        tcd_chan_label = channel_labels{chan_idx};
+                        pi_label = protect_field_label(['Pulsatility_' tcd_chan_label suffix]);
+                        ar_indices(i_ar_index).(pi_label) = pi;
+                    end
+                end
+
+            end
         end
     end % end of loop over conditions (eg rest, stand)
 end % end of loop over acquisitions
 
 if ~options.do_preproc_only
     ar_table = struct2table(ar_indices, 'AsArray', true); %just added ", 'AsArray', true"
-    ar_table_fn = fullfile(options.result_dir, 'autoregulation_indices.tsv');
+    ar_table_fn = fullfile(options.result_dir, 'autoregulation_indices.xlsx');
     write_log(['Save AR index table to ' ar_table_fn '\n']);
-    writetable(ar_table, ar_table_fn, 'WriteRowNames', true, ...
-              'Delimiter', 'tab', ...
-              'FileType', 'text'); 
-              
-              
-    if options.pulsatility.do     
-        pulsatility_table = struct2table(pulsatility_indices);
-        pulsatility_table_fn = fullfile(options.result_dir, 'pulsatility_indices.tsv');
-        write_log(['Save AR index table to ' ar_table_fn '\n']);
-        writetable(pulsatility_table, pulsatility_table_fn, 'WriteRowNames', true, ...
-                  'Delimiter', 'tab', ...
-                  'FileType', 'text');
-        
-        if options.make_figs_general % Génère le graphique à barres groupées à partir du fichier .tsv
-            plot_grouped_pulsatility_avg(pulsatility_table_fn);
+    writetable(ar_table, ar_table_fn, 'WriteRowNames', true); 
+
+    if options.pulsatility.do             
+        if options.make_figs % Génère le graphique à barres groupées à partir du fichier .tsv
+            plot_grouped_pulsatility_avg(ar_table_fn, options.fig_dir);
         end
     end
 end
 end
 
+function preprocessing(acq_defs, options)
 
+for iacq=1:length(acq_defs)
+    acq_name = acq_defs(iacq).acq_name;
+
+    fprintf('Preprocessing %s\n', acq_name);
+
+    file_raw = nst_get_bst_func_files(acq_name, ['origin' get_ppl_tag()], 'Raw');
+    if isempty(file_raw)
+        warning('Cannot find "origin/Raw" data for "%s".', acq_name);
+        continue;
+    elseif iscell(file_raw) && length(file_raw) > 1
+        warning('Expect only 1 raw file "origin/Raw", but %d found for "%s".',  ...
+            length(file_raw), acq_name);
+        continue;
+    end
+
+    if iscell(file_raw)
+        file_raw = file_raw{1};
+    end
+
+    preproc_folder = sprintf('preproc_%s', get_ppl_tag());
+
+    chan_fix_item = [acq_name '/' preproc_folder '/Raw_Chan_Fix' ];
+    if isfield(acq_defs, 'channels_to_swap') && ~isempty(acq_defs(iacq).channels_to_swap)
+        [sFile_chan_fix, redone] = nst_run_bst_proc(chan_fix_item, 0, ...
+                                                    'process_psa_swap_channels', file_raw, [], ...
+                                                    'channelname_1',   acq_defs(iacq).channels_to_swap{1}, ...
+                                                    'channelname_2',   acq_defs(iacq).channels_to_swap{2});
+    else
+        [sFile_chan_fix, redone] = nst_run_bst_proc(chan_fix_item, 0, ...
+                                                    'process_duplicate', file_raw, [], ...
+                                                    'target', 1, ...  % Duplicate data files
+                                                    'tag',    '_copy');
+    end
+
+    detect_heart_beats(sFile_chan_fix, ...
+                       options.heart_beats.ecg_channel_labels, ...
+                       options.heart_beats.event_name);
+end
+
+end
 
 function detect_heart_beats(sFile, ecg_channel_labels, heart_beat_event_name)
 sEvents = in_bst_data(sFile, 'Events');
@@ -627,14 +645,14 @@ options.moving_average.do = 1;
 options.moving_average_window_sec = 10;
 
 options.pulsatility.do = 1;
+options.pulsatility_az = 0;
 
 options.deglitch.do = 0;
 options.deglitch.redo = 0;
 options.deglitch.agrad_std_factor = 2.5;
 
 %fig OPTIONS
-options.make_figs_general = 1;    % % Génère le graphique à barres groupées à partir du fichier .tsv
-options.make_figs_individual = 1; % For generating individual subject graphs
+options.make_figs = 1; 
 options.save_fig_method = 'saveas'; % 'saveas', 'export_fig'
 options.export_fig_dpi = 90;
 options.fig_dir = ''; % the directory where 'pulsatility_figures' will be generated (default in data_analysis)
@@ -710,31 +728,43 @@ for iacq=1:length(acqs_info)
         % DataMat.Timestamp = DataMatOrig.Timestamp;
         % bst_save(file_fullpath(sFiles.FileName), DataMat, 'v7');
     end
-
-    warning off MATLAB:load:variableNotFound
-    data_tmp = in_bst_data(sFiles.FileName, 'Events');
-    warning on MATLAB:load:variableNotFound
-    if isempty(data_tmp.Events) || ~any(ismember({options.gaps.event_label}, {data_tmp.Events.label}))
-        tag_events = db_template('event');
-        ievt = 1;
-        for igap=1:length(options.gaps)
-            tag_events(ievt).label = options.gaps(igap).event_label;
-            tag_events(ievt).times = zeros(2,0);
-            ievt = ievt + 1;
-        end
-        for icondition=1:length(options.conditions)
-            tag_events(ievt).label = options.conditions{icondition};
-            tag_events(ievt).times = zeros(2,0);
-            ievt = ievt + 1;
-        end
-        % sFile_in = bst_process('GetInputStruct', sFiles);
-        process_nst_import_csv_events('import_events', [], sFiles, tag_events);
-    end
+    add_default_events(sFiles, options);
     sFiles = bst_process('CallProcess', 'process_set_comments', sFiles, [], ...
                          'tag', 'Raw', 'isindex', 0);
     files_in = [files_in sFiles.FileName];
 end
 
+end
+
+function add_default_events(sFile, options)
+warning off MATLAB:load:variableNotFound
+data_tmp = in_bst_data(sFile.FileName, 'Events');
+warning on MATLAB:load:variableNotFound
+if ~isempty(data_tmp.Events)
+    data_event_labels = {data_tmp.Events.label};
+else
+    data_event_labels = {};
+end
+tag_events = db_template('event');
+ievt = 1;
+for igap=1:length(options.gaps)
+    if ~ismember(options.gaps(igap).event_label, data_event_labels)
+        tag_events(ievt).label = options.gaps(igap).event_label;
+        tag_events(ievt).times = zeros(2,0);
+        ievt = ievt + 1;
+    end
+end
+for icondition=1:length(options.conditions)
+    if ~ismember(options.conditions{icondition}, data_event_labels)
+        tag_events(ievt).label = options.conditions{icondition};
+        tag_events(ievt).times = zeros(2,0);
+        ievt = ievt + 1;
+    end
+end
+% sFile_in = bst_process('GetInputStruct', sFiles);
+if ievt > 1
+    process_nst_import_csv_events('import_events', [], sFile, tag_events);
+end
 end
 
 function create_dirs(options)
@@ -744,30 +774,6 @@ create_dir(options.export_dir_events);
 create_dir(options.export_dir_channel_flags);
 create_dir(options.export_dir_preprocessed);
 end
-
-
-% TODO: export motion correction tagging to external file
-% sRaw = load(file_fullpath(sFile_raw));
-% sExport.Events = sRaw.Events(strcmp({sRaw.Events.label}, 'movement_artefacts'));
-% export_events(sExport, [], moco_export_fn);
-
-% TODO: export bad channel tagging information
-
-% TODO: plot raw input signals
-% fig_bfn = sprintf('%s_%s_signals_raw.png', SubjectName, data_tag);
-% fig_fn = protect_fn_str(fullfile(options.fig_dir, fig_bfn ));
-% if ~isempty(options.fig_dir) && options.make_figs && options.plot_raw_signals.do && ...
-%         (force_redo || options.plot_raw_signals.redo || ~exist(fig_fn, 'file'))
-%    plot_signals(sFile_raw, fig_fn, options);
-% end
-
-
-%         if exist(moco_fn, 'file')
-            % Load event from pre-saved file
-            % TODO: test
-%             sFile_in = load(file_fullpath(file_in));
-%             [sFile_in, events] = import_events(sFile_in, [], moco_fn, evt_format);   
-%         else
 
 function sync_markings(sFiles, options, sync_mode)
 
@@ -784,7 +790,12 @@ sync_markings_logic(sFiles, @import_events_wrap, @export_events_wrap, ...
 sync_markings_logic(sFiles, @import_channels_wrap, @export_channels_wrap, ...
                     io_options, '_channel_flags', options.export_dir_events, ...
                     options.dry_markings_sync, sync_mode);
-
+if strcmp(sync_mode, 'load_all') 
+    sInputs = bst_process('GetInputStruct', sFiles);
+    for ifile=1:length(sFiles)
+        add_default_events(sInputs(ifile), options)
+    end
+end
 end
 
 function export_events_wrap(file_fn, marking_fn, io_options)
@@ -809,42 +820,28 @@ end
 
 function sync_markings_logic(sFiles, import_marking_func, export_marking_func, io_options, marking_fn_suffix, marking_dir, dry, mode)
 
-assert(ismember(mode, {'sync', 'export_all', 'load_all'}));
+assert(ismember(mode, {'export_all', 'load_all'}));
 
 for iFile=1:length(sFiles)
     file_fn = file_fullpath(sFiles{iFile});
-    file_obj = dir(file_fn);
-    local_modification_date = file_obj.date;
 
     [subject_name, condition_label, item_label] = bst_file_info(file_fn);
     marking_fn = fullfile(marking_dir, protect_fn_str([subject_name '--' condition_label '--' item_label ...
                                                        '_' marking_fn_suffix '.mat']));
-    if ~exist(marking_fn, 'file')
-        export_modification_date = 0;
-    else
-        sMDate = load(marking_fn, 'modification_date');
-        if isempty(fieldnames(sMDate))
-            export_modification_date = 0;
-        else
-            export_modification_date = sMDate.modification_date;
-        end
-    end
-    if strcmp(mode, 'export_all') || (strcmp(mode, 'sync') && local_modification_date > export_modification_date)
+
+    if strcmp(mode, 'export_all') 
         fprintf('Export markings from %s to %s\n', ...
                 file_fn, marking_fn);
         if ~dry
             export_marking_func(file_fn, marking_fn, io_options);
-            save(marking_fn, 'local_modification_date', '-append');
         end
-    elseif strcmp(mode, 'load_all') || (strcmp(mode, 'sync') && local_modification_date < export_modification_date)
-        fprintf('Import markings from %s to %s\n', ...
-                marking_fn, file_fn);
+    elseif strcmp(mode, 'load_all') 
+        fprintf('Import markings from %s to %s\n', marking_fn, file_fn);
         if ~dry
             import_marking_func(file_fn, marking_fn, io_options);
         end
     else
-        fprintf('No markings sync: Local and export markings have the same date (%s - %s)\n', ...
-                marking_fn, file_fn);
+        error('Bad mode %s\n', mode);
     end
 end
 
@@ -1130,35 +1127,23 @@ function [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( ..
 
         pi_std = std(pi_values);                
         % Construction des noms de champ
-        base_label = protect_field_label(['Pulsatility_' chan_label suffix]);                
-        % Ajout dans ar_indices
-        ar_indices(i_ar_index).([base_label '_avg']) = pi_avg;
-        ar_indices(i_ar_index).([base_label '_min']) = pi_min;
-        ar_indices(i_ar_index).([base_label '_max']) = pi_max;
-        ar_indices(i_ar_index).([base_label '_std']) = pi_std;
+        label_suffix = protect_field_label([chan_label suffix]);
         % Ajout dans pulsatility_indices (pour le .tsv)
         pulsatility_indices(i_ar_index).Subject = subject_tag;
-        pulsatility_indices(i_ar_index).([base_label '_avg']) = pi_avg;
-        pulsatility_indices(i_ar_index).([base_label '_min']) = str_min;
-        pulsatility_indices(i_ar_index).([base_label '_max']) = str_max;
-        pulsatility_indices(i_ar_index).([base_label '_std']) = pi_std;
+        pulsatility_indices(i_ar_index).(['Pulsatility_avg_' label_suffix]) = pi_avg;
+        pulsatility_indices(i_ar_index).(['Pulsatility_min_' label_suffix]) = str_min;
+        pulsatility_indices(i_ar_index).(['Pulsatility_max_' label_suffix]) = str_max;
+        pulsatility_indices(i_ar_index).(['Pulsatility_std_' label_suffix]) = pi_std;
         
-        if options.make_figs_individual
+        if options.make_figs
             %Two plot
-            
-            if isempty(options.fig_dir)
-                base_fig_dir = fullfile(fileparts(pwd), 'data_analysis', 'pulsatility_figures');
-            else
-                base_fig_dir = fullfile(options.fig_dir, 'pulsatility_figures');
-            end
-    
-    
+
             % Génère un tag unique à partir du nom de fichier complet
             [~, sFileBase, ~] = fileparts(sFile_puls);
             safe_tag = protect_fn_str(sFileBase);  % Nettoie le nom pour l'utiliser dans un dossier
             
             % Utilise un sous-dossier unique pour éviter les collisions
-            fig_folder = fullfile(base_fig_dir, [subject_tag '__' safe_tag]);
+            fig_folder = fullfile(options.fig_dir, [subject_tag '__' safe_tag]);
             
             if ~exist(fig_folder, 'dir')
                 mkdir(fig_folder);
@@ -1185,12 +1170,12 @@ function [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( ..
     end
 end
 
-function plot_grouped_pulsatility_avg(tsv_path)
-    [folder_path, file_base, ~] = fileparts(tsv_path);
-    T = readtable(tsv_path, 'FileType', 'text', 'Delimiter', '\t');
+function plot_grouped_pulsatility_avg(xlsx_path, fig_dir)
+    [folder_path, file_base, ~] = fileparts(xlsx_path);
+    T = readtable(xlsx_path);
 
     % Get averages du tableau et std
-    is_avg = endsWith(T.Properties.VariableNames, '_avg');
+    is_avg = startsWith(T.Properties.VariableNames, 'Pulsatility_avg');
     avg_data = T{:, is_avg};
     avg_labels = T.Properties.VariableNames(is_avg);
     std_labels = strrep(avg_labels, '_avg', '_std');
@@ -1225,9 +1210,8 @@ function plot_grouped_pulsatility_avg(tsv_path)
     legend(avg_labels, 'Interpreter', 'none', 'Location', 'northeastoutside');
     grid on;
 
-    % 
-    fig_path = fullfile(fileparts(pwd), 'data_analysis', 'grouped_pulsatility_avg.png');
-    saveas(gcf, fig_path);
+    fig_fn = fullfile(fig_dir, 'grouped_pulsatility_avg.png');
+    saveas(gcf, fig_fn);
     close(gcf);
 end
 

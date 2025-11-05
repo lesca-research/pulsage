@@ -57,8 +57,10 @@ sProcess.options.label2.Type    = 'label';
 sProcess.options.avg_func.Comment = {'Arithmetic average:  <FONT color="#777777">mean(x)</FONT>', ...
                                      'Root mean square (RMS):  <FONT color="#777777">sqrt(sum(x.^2)/N)</FONT>', ...
                                      'Standard deviation:  <FONT color="#777777">sqrt(var(x))</FONT>', ...
-                                     'Median:  <FONT color="#777777">median(x)</FONT>'; ...
-                                     'mean', 'rms', 'std', 'median'};
+                                     'Median:  <FONT color="#777777">median(x)</FONT>', ...
+                                     'Minimum:  <FONT color="#777777">min(x)</FONT>', ...
+                                     'Max:  <FONT color="#777777">max(x)</FONT>'; ...
+                                     'mean', 'rms', 'std', 'median', 'min', 'max'};
 sProcess.options.avg_func.Type    = 'radio_label';
 sProcess.options.avg_func.Value   = 'mean';
 
@@ -120,15 +122,21 @@ A = zeros(size(sInput.A, 1), 1);
 operation = GetFileTag(sProcess);
 for ichan=1:nb_channels
     channel_data = sInput.A(ichan, time_mask(ichan, :), :);
+    time = sInput.TimeVector(time_mask(ichan, :));
     nb_samples = length(channel_data);
+    
     low = round(sProcess.options.pct_filter_range.Value{1}(1)/100 * nb_samples);
     high = round(sProcess.options.pct_filter_range.Value{1}(2)/100 * nb_samples);
-    sorted_data = sort(channel_data);
+    [sorted_data, sort_idx] = sort(channel_data);
+    time = time(sort_idx);
     channel_data = sorted_data(low:high);
+    time = time(low:high);
     if any(isnan(channel_data))
         warning('Nan value(s) in filtered data of channel "%s"\n', channel_names{ichan})
     end
+
     % Apply function
+    result_itime = 1;
     switch operation
         case 'mean'
             result = mean(channel_data, 2);
@@ -138,6 +146,10 @@ for ichan=1:nb_channels
             result = sqrt(var(channel_data, 0, 2));
         case 'median'
             result = median(channel_data, 2);
+        case 'min'
+            [result, result_itime] = min(channel_data, 2);
+        case 'max'
+            [result, result_itime] = max(channel_data, 2);
     end
     if any(isnan(result))
         warning('Nan value(s) in computation of %s for channel "%s"\n', operation, channel_names{ichan})
@@ -149,9 +161,9 @@ sInput.A = [A, A];
 % Keep only first and last time values
 
 if (length(sInput.TimeVector) > 2)
-    sInput.TimeVector = sInput.TimeVector(1) + [0, sInput.TimeVector(2)-sInput.TimeVector(1)];
+    sInput.TimeVector = time(result_itime) + [0, sInput.TimeVector(2)-sInput.TimeVector(1)];
 else
-    sInput.TimeVector = sInput.TimeVector(1) + [0, 1e-6];
+    sInput.TimeVector = time(result_itime) + [0, 1e-6];
 end
 
 % Build file tag
