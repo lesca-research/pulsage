@@ -89,11 +89,9 @@ for iInput=1:length(sInputs)
     dt = diff(sDataIn.Time(1:2));
     for ichan=1:length(cbf_sig_idx_chan)
         idx_chan = cbf_sig_idx_chan(ichan);
-        cbf_signal = sDataIn.F(idx_chan, :);
-        % TODO convert block size to samples
-        
+        cbf_signal = sDataIn.F(idx_chan, :);      
         block_size = round(sProcess.options.block_duration.Value{1} / dt);
-        mx_out = Compute(ref_signal, cbf_signal, block_size, sProcess.options.pct_filter.Value{1}/100);
+        mx_out = Compute(ref_signal, cbf_signal, block_size, sProcess.options.pct_filter.Value{1}/100, channels.Channel(idx_chan).Name);
         chan_name = channels.Channel(idx_chan).Name;
         mx_values.(protect_field_label(['AR_Mx_block_' chan_name])) = mx_out;
     end   
@@ -112,7 +110,7 @@ end
 
 
 %% ===== Compute =====
-function [Mx] = Compute(bp_signal, cbfi_signal, block_size, pct_filter)
+function [Mx] = Compute(bp_signal, cbfi_signal, block_size, pct_filter, channel_name)
 
 if size(bp_signal, 1) > size(bp_signal, 2)
     block_window = [block_size, 1];
@@ -120,18 +118,18 @@ else
     block_window = [1, block_size];
 end
 
-fprintf('Compute blocks\n');
+% fprintf('Compute blocks\n');
 bp_signal_block = blockproc(bp_signal, block_window, @(x)mean(x.data));
 cbfi_signal_block = blockproc(cbfi_signal, block_window, @(x)mean(x.data));
 
-fprintf('Filter blocks\n');
+% fprintf('Filter blocks\n');
 [bp_signal_block_filtered, cbfi_signal_block_filtered] = pct_filter2(bp_signal_block, cbfi_signal_block, pct_filter);
 
-fprintf('Compute block correlations\n');
+% fprintf('Compute block correlations\n');
 [r, p] = corrcoef(bp_signal_block_filtered, cbfi_signal_block_filtered);
 
 if p > 0.05
-    warning('No significant correlation between block signals of BP and CBFi');
+    warning('%s: No significant correlation between block signals of BP and CBFi', channel_name);
 end
 
 Mx = r(1,2);

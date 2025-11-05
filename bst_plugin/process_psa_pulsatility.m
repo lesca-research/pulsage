@@ -47,6 +47,10 @@ sProcess.options.channelnames.Comment = 'Channel names (Coma-separated values):'
 sProcess.options.channelnames.Type    = 'text';
 sProcess.options.channelnames.Value   = '';
 
+sProcess.options.use_discard_events.Comment = 'Use discard_ events to discard segments';
+sProcess.options.use_discard_events.Type       = 'checkbox';
+sProcess.options.use_discard_events.Value      = 0;
+
 sProcess.options.heart_beat_event.Comment = 'Heart beat event';
 sProcess.options.heart_beat_event.Type    = 'text';
 sProcess.options.heart_beat_event.Value   = 'cardiac';
@@ -72,6 +76,8 @@ for iInput=1:length(sInputs)
         events = sDataRaw.F.events;
     end
     channels = in_bst_channel(sInputs(iInput).ChannelFile);
+    channel_names = {channels.Channel.Name};
+
     nb_channels = size(channels.Channel, 2);
     if ~isempty(sProcess.options.channelnames.Value)
         idx_chans = channel_find(channels.Channel, sProcess.options.channelnames.Value);
@@ -80,9 +86,13 @@ for iInput=1:length(sInputs)
     else
         chan_mask = true(1, nb_channels);
     end
+    if sProcess.options.use_discard_events.Value
+        time_mask = process_psa_average_time_robust('discard_time_mask', ...
+                                                    events, channel_names, sDataIn.Time);
+    else
+        time_mask = true(nb_channels, size(sDataIn.Time, 2));
+    end
 
-    signal = sDataIn.F(chan_mask, :)';
-    
     ievent = strcmp(sProcess.options.heart_beat_event.Value, ...
                     {events.label});
 
@@ -90,10 +100,13 @@ for iInput=1:length(sInputs)
     pulsatility = zeros(length(events(ievent).times(1,:)) - 1, nb_selected_chans);
     chan_indices = find(chan_mask);
     for iChan = 1:nb_selected_chans
-        sig_chan = sDataIn.F(chan_indices(iChan), :)';  % signal 1D pour le canal i
-        [puls_chan, pulsatility_time] = apply_on_epochs(sig_chan, sDataIn.Time,...
+        chan_idx = chan_indices(iChan);
+        sig_chan = sDataIn.F(chan_idx, :)';  % signal 1D pour le canal i
+        time_mask_chan = time_mask(chan_idx, :);
+        [puls_chan, pulsatility_time] = apply_on_epochs(sig_chan, sDataIn.Time, ...
+                                                        time_mask_chan, ...
                                                         events(ievent).times(1,:),...
-                                                        @pulsatility);
+                                                        @pulsatility, channel_names{chan_idx});
         pulsatility(:, iChan) = puls_chan;
     end
 
@@ -126,17 +139,22 @@ end
 end
 
 
-function [values, times] = apply_on_epochs(signal, signal_time, epoch_times, func)
+function [values, times] = apply_on_epochs(signal, signal_time, time_mask, epoch_times, func, channel_name)
 
 sampling_freq = 1 ./ diff(signal_time(1:2));
 epoch_samples = round((epoch_times-signal_time(1)) .* sampling_freq) + 1;
 
-values = zeros(length(epoch_samples)-1, size(signal,2));
+values = NaN(length(epoch_samples)-1, size(signal,2));
 times = zeros(1, length(epoch_samples)-1);
 for iepoch=1:(length(epoch_samples)-1)
     [value, time] = func(signal(epoch_samples(iepoch):epoch_samples(iepoch+1), :), ...
                          signal_time(epoch_samples(iepoch):epoch_samples(iepoch+1)));
-    values(iepoch,:) = value;
+    if all(time_mask(epoch_samples(iepoch):epoch_samples(iepoch+1)))
+        values(iepoch,:) = value;
+    % else
+    %     fprintf('Channel %s: Ignore cardiac epoch from %1.1fs to %1.1fs because it contains a discard segment\n', ...
+    %             channel_name, signal_time(epoch_samples(iepoch)), signal_time(epoch_samples(iepoch+1)));
+    end
     times(1, iepoch) = time;
 end
 

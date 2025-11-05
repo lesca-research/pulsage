@@ -47,9 +47,13 @@ sProcess.options.pct_filter_range.Comment = 'Percentile filter range (percent):'
 sProcess.options.pct_filter_range.Type    = 'range';
 sProcess.options.pct_filter_range.Value   = {[2.5 97.5], '%', 1};
 
-sProcess.options.use_bad_events.Comment = 'Use bad_ events to discard segments';
-sProcess.options.use_bad_events.Type       = 'checkbox';
-sProcess.options.use_bad_events.Value      = 0;
+sProcess.options.use_discard_events.Comment = 'Use discard_ events to discard segments';
+sProcess.options.use_discard_events.Type       = 'checkbox';
+sProcess.options.use_discard_events.Value      = 0;
+
+sProcess.options.ignore_nans.Comment = 'Ignore NaN values';
+sProcess.options.ignore_nans.Type    = 'checkbox';
+sProcess.options.ignore_nans.Value   = 1;
 
 % === FUNCTION
 sProcess.options.label2.Comment = '<U><B>Function</B></U>:';
@@ -90,32 +94,17 @@ function sInput = Run(sProcess, sInput) %#ok<DEFNU>
 channels = in_bst_channel(sInput.ChannelFile);
 channel_names = {channels.Channel.Name};
 nb_channels = size(sInput.A, 1);
-time_mask = true(nb_channels, size(sInput.TimeVector, 2));
 
 if ~ismatrix(sInput.A)
     error('Unsupported number of dimensions');
 end
 
-% Filter bad segments
-if sProcess.options.use_bad_events.Value
+% Filter discard segments
+if sProcess.options.use_discard_events.Value
     sEvents = in_bst_data(sInput.FileName, 'Events');
-    bad_idx_events = find(~cellfun(@isempty, regexpi({sEvents.Events.label}, ['bad_.*'])));
-    if ~isempty(bad_idx_events)
-        channel_map = containers.Map(channel_names, 1:length(channel_names));
-        sfreq = 1/diff(sInput.TimeVector(1:2));
-        for evt_idx=bad_idx_events
-            suffix = sEvents.Events(evt_idx).label(5:end);
-            if channel_map.isKey(suffix)
-                ichannel = channel_map(suffix);
-                samplesBounds = round((sEvents.Events(evt_idx).times-sInput.TimeVector(1)) * sfreq);
-                time_mask(ichannel, samplesBounds(1):samplesBounds(2)) = 0;
-                fprintf('Discard channel-specific bad segment(s) using event %s\n', sEvents.Events(evt_idx).label);
-            else
-                fprintf('Discard bad segment(s) for all channels using event %s\n', sEvents.Events(evt_idx).label);
-                time_mask(:, samplesBounds(1):samplesBounds(2)) = 0;
-            end
-        end
-    end
+    time_mask = discard_time_mask(sEvents.Events, channel_names, sInput.TimeVector);
+else
+    time_mask = true(nb_channels, size(sInput.TimeVector, 2));
 end
 
 A = zeros(size(sInput.A, 1), 1);
@@ -123,6 +112,14 @@ operation = GetFileTag(sProcess);
 for ichan=1:nb_channels
     channel_data = sInput.A(ichan, time_mask(ichan, :), :);
     time = sInput.TimeVector(time_mask(ichan, :));
+    if sProcess.options.ignore_nans.Value
+        m_nan = isnan(channel_data);
+        if any(m_nan)
+            channel_data = channel_data(~m_nan);
+            time = time(~m_nan);
+        end
+    end
+    
     nb_samples = length(channel_data);
     
     low = round(sProcess.options.pct_filter_range.Value{1}(1)/100 * nb_samples);
@@ -131,7 +128,8 @@ for ichan=1:nb_channels
     time = time(sort_idx);
     channel_data = sorted_data(low:high);
     time = time(low:high);
-    if any(isnan(channel_data))
+    m_nan = isnan(channel_data); 
+    if any(m_nan)
         warning('Nan value(s) in filtered data of channel "%s"\n', channel_names{ichan})
     end
 
@@ -178,5 +176,24 @@ end
 
 end
 
-
+function time_mask=discard_time_mask(events, channel_names, time)
+time_mask = true(length(channel_names), size(time, 2));
+discard_idx_events = find(~cellfun(@isempty, regexpi({events.label}, 'discard_.*')));
+if ~isempty(discard_idx_events)
+    channel_map = containers.Map(channel_names, 1:length(channel_names));
+    sfreq = 1/diff(time(1:2));
+    for evt_idx=discard_idx_events
+        suffix = events(evt_idx).label(9:end);
+        samplesBounds = round((events(evt_idx).times-time(1)) * sfreq);
+        if channel_map.isKey(suffix)
+            ichannel = channel_map(suffix);
+            time_mask(ichannel, samplesBounds(1):samplesBounds(2)) = 0;
+            % fprintf('Discard channel-specific segment(s) using event %s\n', events(evt_idx).label);
+        else
+            % fprintf('Discard segment(s) for all channels using event %s\n', events(evt_idx).label);
+            time_mask(:, samplesBounds(1):samplesBounds(2)) = 0;
+        end
+    end
+end
+end
 
