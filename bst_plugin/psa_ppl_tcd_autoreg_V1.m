@@ -459,6 +459,7 @@ for iacq=1:length(acq_defs)
             [sFile_puls, redone] = nst_run_bst_proc(pulsatility_item, 0, ...
                                                     'process_psa_pulsatility', sFile_fgaps, [], ...
                                                     'timewindow',    [], ...
+                                                    'use_discard_events',   1, ...
                                                     'channelnames',  strjoin(channel_labels(cfbi_idx_chans), ','), ...
                                                     'heart_beat_event', options.heart_beats.event_name, ...
                                                     'timeres',       'none', ...  % None
@@ -466,6 +467,7 @@ for iacq=1:length(acq_defs)
                                                     'avgwinoverlap', 50, ...
                                                     'scalarprod',    0, ...
                                                     'outputmode',    'input');  % separately for each file
+            % TODO remove discard_ events
             if options.pulsatility_az
                 %Extrait les statistiques de l'indice de pulsatilité pour chaque canal valide
                 % pour chaque canal CBFi valide (non marqué "bad") dans le fichier Brainstorm correspondant.
@@ -477,8 +479,8 @@ for iacq=1:length(acq_defs)
                 [sFile_puls_avg, redone] = nst_run_bst_proc(pulsatility_avg_item, 0, ...
                                                             'process_psa_average_time_robust', sFile_puls, [], ...
                                                             'pct_filter_range', [5, 95], ...
-                                                            'discard_bad_events',   1, ...
-                                                            'avg_func',         'mean', ...  % Arithmetic average:  mean(x)
+                                                            'use_discard_events',   0, ...
+                                                            'avg_func',  'mean', ...  % Arithmetic average:  mean(x)
                                                             'overwrite',        0);
     
                 pulsatility_avg_data = in_bst(sFile_puls_avg);
@@ -497,16 +499,14 @@ for iacq=1:length(acq_defs)
     end % end of loop over conditions (eg rest, stand)
 end % end of loop over acquisitions
 
-if ~options.do_preproc_only
-    ar_table = struct2table(ar_indices, 'AsArray', true); %just added ", 'AsArray', true"
-    ar_table_fn = fullfile(options.result_dir, 'autoregulation_indices.xlsx');
-    write_log(['Save AR index table to ' ar_table_fn '\n']);
-    writetable(ar_table, ar_table_fn, 'WriteRowNames', true); 
+ar_table = struct2table(ar_indices, 'AsArray', true); %just added ", 'AsArray', true"
+ar_table_fn = fullfile(options.result_dir, 'autoregulation_indices.xlsx');
+write_log(sprintf('Save AR index table to %s \n', strrep(ar_table_fn, '\', '\\')));
+writetable(ar_table, ar_table_fn, 'WriteRowNames', true); 
 
-    if options.pulsatility.do             
-        if options.make_figs % Génère le graphique à barres groupées à partir du fichier .tsv
-            plot_grouped_pulsatility_avg(ar_table_fn, options.fig_dir);
-        end
+if options.pulsatility.do             
+    if options.make_figs % Génère le graphique à barres groupées à partir du fichier .tsv
+        plot_grouped_pulsatility_avg(ar_table_fn, options.fig_dir);
     end
 end
 end
@@ -634,6 +634,8 @@ options.heart_beats.event_name = 'cardiac';
 options.conditions = {};
 options.gaps = struct([]);
 
+options.discard_segments = struct([]);
+
 options.fill_gaps.do = 1;
 options.fill_gaps.ar_win_size_sec = 15;
 options.fill_gaps.ar_order_sec = 1;
@@ -754,6 +756,13 @@ for igap=1:length(options.gaps)
         ievt = ievt + 1;
     end
 end
+for idiscard=1:length(options.discard_segments)
+    if ~ismember(options.gaps(idiscard).event_label, data_event_labels)
+        tag_events(ievt).label = options.discard_segments(idiscard).event_label;
+        tag_events(ievt).times = zeros(2,0);
+        ievt = ievt + 1;
+    end
+end
 for icondition=1:length(options.conditions)
     if ~ismember(options.conditions{icondition}, data_event_labels)
         tag_events(ievt).label = options.conditions{icondition};
@@ -777,7 +786,7 @@ end
 
 function sync_markings(sFiles, options, sync_mode)
 
-io_options.events_to_sync = [options.conditions {options.gaps.event_label, options.heart_beats.event_name}];
+io_options.events_to_sync = [options.conditions {options.gaps.event_label, options.discard_segments.event_label, options.heart_beats.event_name}];
 
 if strcmp(sync_mode, 'load_all') 
     bst_process('CallProcess', 'process_evt_delete', sFiles, [], ...
@@ -868,7 +877,7 @@ end
 function export_markings(sFiles, tags, options)
 fprintf('Save marking events to origin...\n');
 io_markings(sFiles, '_events', ...
-            options.export_dir_events, 0, '',  @nst_bst_export_events, [options.conditions {options.gaps.event_label}]);
+            options.export_dir_events, 0, '',  @nst_bst_export_events, [options.conditions {options.gaps.event_label, options.discard_segments.event_label}]);
 fprintf('Save channel flags to origin...\n');
 io_markings(sFiles, @nst_bst_export_channel_flags, @get_channel_flags_fn, ...
                'export_dir_channel_flags', 0, '', options);
