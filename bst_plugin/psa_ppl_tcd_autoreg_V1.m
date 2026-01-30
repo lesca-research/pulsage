@@ -119,35 +119,60 @@ switch action
         varargout{1} = imported_files;
         varargout{2} = redone;
         return;
-    case 'sync_markings'
-        subject_names = {arg1.acq_name};
-        sync_mode = arg2;
-        
-        orig_cond = ['origin' get_ppl_tag()];
-        files_raw = cellfun(@(s)  nst_get_bst_func_files(s, orig_cond , 'Raw'), ...
-                           subject_names, 'UniformOutput', false);
-        missing_raw = cellfun(@isempty, files_raw);
-        if any(missing_raw)
-            error('Missing Raw data files for subjects :\n%s\n', ...
-                    strjoin(cellfun(@(s) sprintf(' - %s', s), subject_names(missing_raw), ...
-                            'UniformOutput', false), '\n'));
-        end
-
+    case 'load_markings'
+        files_raw = {};
+        files_fix = {};
+        condition = ['origin' get_ppl_tag()];
         preproc_cond = ['preproc_' get_ppl_tag()];
-        files_chan_fix = cellfun(@(s)  nst_get_bst_func_files(s, preproc_cond , 'Raw_Chan_Fix'), ...
-                           subject_names, 'UniformOutput', false);
-        missing_chan_fix = cellfun(@isempty, files_chan_fix);
-        if any(missing_chan_fix)
-            warning(sprintf('Missing Raw_Chan_Fix data files for subjects (will be ignored):\n%s\n', ...
-                            strjoin(cellfun(@(s) sprintf(' - %s', s), subject_names(missing_chan_fix), ...
-                                    'UniformOutput', false), '\n')));
+        for iacq=1:length(arg1)
+            acq = acquisitions(iacq);
+            file_raw = nst_get_bst_func_files(acq.acq_tag, condition, 'Raw');
+            if isempty(file_raw)
+                error('Missing Raw data file for %s, %s\n', ...
+                      acq.acq_tag, condition);
+            end
+            files_raw{end+1} = file_raw;
+
+            file_fix = nst_get_bst_func_files(acq.acq_tag, preproc_cond, 'Raw_Chan_Fix');
+            if isempty(file_raw)
+                error('Missing Raw_Chan_Fix data file for %s, %s. Run preprocessing first.\n', ...
+                      acq.acq_tag, preproc_cond);
+            end 
+            files_fix{end+1} = file_fix;
+
         end
-        files_chan_fix = files_chan_fix(~missing_chan_fix);
-        
-        files_to_sync = [files_raw files_chan_fix];
+        files_to_sync = [files_raw files_fix];
         
         create_dirs(options);
-        sync_markings(files_to_sync, options, sync_mode);
+        sync_markings(files_to_sync, options, 'load_all');
+        varargout{1} = files_to_sync;
+        return;
+    case 'save_markings'
+        files_raw = {};
+        files_fix = {};
+        condition = ['origin' get_ppl_tag()];
+        preproc_cond = ['preproc_' get_ppl_tag()];
+        for iacq=1:length(arg1)
+            acq = acquisitions(iacq);
+            file_raw = nst_get_bst_func_files(acq.acq_tag, condition, 'Raw');
+            if isempty(file_raw)
+                error('Missing Raw data file for %s, %s\n', ...
+                      acq.acq_tag, condition);
+            end
+            files_raw{end+1} = file_raw;
+
+            file_fix = nst_get_bst_func_files(acq.acq_tag, preproc_cond, 'Raw_Chan_Fix');
+            if isempty(file_raw)
+                error('Missing Raw_Chan_Fix data file for %s, %s. Run preprocessing first.\n', ...
+                      acq.acq_tag, preproc_cond);
+            end 
+            files_fix{end+1} = file_fix;
+
+        end
+        files_to_sync = [files_raw files_fix];
+        
+        create_dirs(options);
+        sync_markings(files_to_sync, options, 'save_all');
         varargout{1} = files_to_sync;
         return;
     case 'preprocessing'
@@ -833,11 +858,9 @@ assert(ismember(mode, {'export_all', 'load_all'}));
 
 for iFile=1:length(sFiles)
     file_fn = file_fullpath(sFiles{iFile});
-
     [subject_name, condition_label, item_label] = bst_file_info(file_fn);
     marking_fn = fullfile(marking_dir, protect_fn_str([subject_name '--' condition_label '--' item_label ...
                                                        '_' marking_fn_suffix '.mat']));
-
     if strcmp(mode, 'export_all') 
         fprintf('Export markings from %s to %s\n', ...
                 file_fn, marking_fn);
