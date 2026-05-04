@@ -125,7 +125,7 @@ switch action
         condition = ['origin' get_ppl_tag()];
         preproc_cond = ['preproc_' get_ppl_tag()];
         for iacq=1:length(arg1)
-            acq = acquisitions(iacq);
+            acq = arg1(iacq);
             file_raw = nst_get_bst_func_files(acq.acq_tag, condition, 'Raw');
             if isempty(file_raw)
                 error('Missing Raw data file for %s, %s\n', ...
@@ -134,7 +134,7 @@ switch action
             files_raw{end+1} = file_raw;
 
             file_fix = nst_get_bst_func_files(acq.acq_tag, preproc_cond, 'Raw_Chan_Fix');
-            if isempty(file_raw)
+            if isempty(file_fix)
                 error('Missing Raw_Chan_Fix data file for %s, %s. Run preprocessing first.\n', ...
                       acq.acq_tag, preproc_cond);
             end 
@@ -153,7 +153,7 @@ switch action
         condition = ['origin' get_ppl_tag()];
         preproc_cond = ['preproc_' get_ppl_tag()];
         for iacq=1:length(arg1)
-            acq = acquisitions(iacq);
+            acq = arg1(iacq);
             file_raw = nst_get_bst_func_files(acq.acq_tag, condition, 'Raw');
             if isempty(file_raw)
                 error('Missing Raw data file for %s, %s\n', ...
@@ -162,7 +162,7 @@ switch action
             files_raw{end+1} = file_raw;
 
             file_fix = nst_get_bst_func_files(acq.acq_tag, preproc_cond, 'Raw_Chan_Fix');
-            if isempty(file_raw)
+            if isempty(file_fix)
                 error('Missing Raw_Chan_Fix data file for %s, %s. Run preprocessing first.\n', ...
                       acq.acq_tag, preproc_cond);
             end 
@@ -172,7 +172,7 @@ switch action
         files_to_sync = [files_raw files_fix];
         
         create_dirs(options);
-        sync_markings(files_to_sync, options, 'save_all');
+        sync_markings(files_to_sync, options, 'export_all');
         varargout{1} = files_to_sync;
         return;
     case 'preprocessing'
