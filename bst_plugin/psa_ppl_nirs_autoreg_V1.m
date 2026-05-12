@@ -109,6 +109,9 @@ switch action
             varargout{1} = get_options();
         end
         return;
+    case 'create_template'
+        create_template(arg1);
+        return;    
     case 'import'
         acqs_info = arg1;
 
@@ -116,11 +119,7 @@ switch action
             options = get_options();
         end
         create_dirs(options);
-        [imported_files, redone] = import_tcd_files(acqs_info, options);
-        if options.import.load_markings
-            % TODO properly handle timestamp to avoid overwriting when syncing after fresh import 
-            %psa_ppl_tcd_autoreg_V1('sync_markings', options, {acqs_info(redone==1).acq_name}, 'load_all');
-        end
+        [imported_files, redone] = import_data_files(acqs_info, options);
         varargout{1} = imported_files;
         varargout{2} = redone;
         return;
@@ -222,9 +221,6 @@ switch action
         sync_markings(files_to_sync, options, sync_mode);
         varargout{1} = files_to_sync;
         return;
-
-
-
     case 'analyse'
 
     otherwise
@@ -667,6 +663,58 @@ if ~options.do_preproc_only
 end
 end
 
+function create_template(nirs_fn)
+fm_subject = get_full_head_model_subject_name();
+file_raw_fm = nst_get_bst_func_files(fm_subject, ['origin' get_ppl_tag()], 'Raw');
+if isempty(file_raw_fm)
+    if endsWith(nirs_fn, '.snirf')
+        format = 'NIRS-SNIRF';
+    else
+        format = 'NIRS-BRS';
+    end
+    sFile_in = bst_process('CallProcess', 'process_import_data_time', [], [], ...
+                            'subjectname',  fm_subject, ...
+                            'condition',    ['origin' get_ppl_tag()], ...
+                            'datafile',     {nirs_fn, format}, ...
+                            'timewindow',   [], ...
+                            'split',        0, ...
+                            'ignoreshort',  1, ...
+                            'channelalign', 1, ...
+                            'usectfcomp',   0, ...
+                            'usessp',       0, ...
+                            'freq',         [], ...
+                            'baseline',     []);
+    sFile_in = bst_process('CallProcess', 'process_set_comment', sFile_in, [], ...
+                            'tag',     'Raw', ...
+                            'isindex', 0);
+    
+    optodes_coords_fn = fullfile(fileparts(nirs_fn), 'template__nspst_V1_optodes.tsv');
+    if exist(optodes_coords_fn, "file") == 2
+        fprintf('Set optode coordinates from file: %s\n', optodes_coords_fn);
+        bst_process('CallProcess', 'process_channel_addloc', sFile_in, [], ...
+                    'channelfile', {optodes_coords_fn, 'BIDS-SCANRAS-MM'}, ...
+                    'usedefault',  '', ...  %
+                    'fixunits',    1, ...
+                    'vox2ras',     0, ...
+                    'mrifile',     {'', ''}, ...
+                    'fiducials',   []);
+        manual_fix = 0;
+    else
+        fprintf('No optode coordinates file found (template__nspst_V1_optodes.tsv)');
+        manual_fix = 1;
+    end
+    fprintf('Template created.\n');
+    if manual_fix
+        fprintf('You can manually adjust the optode montage:\n'); 
+        fprintf('Right-click on template channels > MRI Registration > Edit...\n');
+        fprintf('Once the montage is adjusted, it is advised to export the optode coordinates.\n')
+    end
+    fprintf('Next step: Import all data\n');
+else
+    fprintf('Template already created. Remove it before calling this function to create it again.');
+end
+
+end
 
 
 function detect_heart_beats(sFile, ecg_channel_labels, heart_beat_event_name)
@@ -1341,20 +1389,26 @@ end
 
 
 % pour le import
-function [files_in, redone_imports] = import_tcd_files(acqs_info, options)
+function [files_in, redone_imports] = import_data_files(acqs_info, options)
+
+% Export template channel coordinates. 
+% They will be applied to all imported files
+fm_subject = get_full_head_model_subject_name();
+sStudy = bst_get('StudyWithCondition', [fm_subject '/origin' get_ppl_tag()]);
+template_ChannelFile = file_fullpath(sStudy.Channel.FileName);
+tmp_template_channel_fn = [tempname '.tsv'];
+export_channel(template_ChannelFile, tmp_template_channel_fn, 'BIDS-NIRS-ALS-MM', 0);
+
 files_in = {};
 redone_imports = [];
-condition = ['origin_labchart' get_ppl_tag()];
+
+condition = ['origin' get_ppl_tag()];
 for iacq=1:length(acqs_info)
     %% Import data
     labchart_fn = acqs_info(iacq).labchart_fn;
     subject_name = acqs_info(iacq).acq_name;
-    discard_start = [];
-    if isfield(acqs_info, 'crop_start_time')
-        discard_start = acqs_info(iacq).crop_start_time;
-    end
-    file_raw = nst_get_bst_func_files(subject_name, ...
-                                     ['origin_labchart' get_ppl_tag()], 'Raw');
+
+    file_raw = nst_get_bst_func_files(subject_name, condition, 'Raw');
     if ~isempty(file_raw)
         files_in = [files_in file_raw];
         redone_imports = [redone_imports 0];
@@ -1362,7 +1416,23 @@ for iacq=1:length(acqs_info)
     else
         redone_imports = [redone_imports 1];
     end
+
+    [file_in, redone] = nst_run_bst_proc([subject_name '/' condition '/Raw'], options.import.redo, ...
+                                   'process_import_data_time', [], [], ...
+                                   'subjectname',  subject_name, ...
+                                   'condition',    condition, ...
+                                   'datafile',     {nirs_fn, 'NIRS-BRS'}, ...
+                                   'timewindow',   [], ...
+                                   'split',        0, ...
+                                   'ignoreshort',  1, ...
+                                   'channelalign', 1, ...
+                                   'usectfcomp',   0, ...
+                                   'usessp',       0, ...
+                                   'freq',         [], ...
+                                   'baseline',     []);
+
     if endsWith(labchart_fn, 'bst')
+
         sFiles = bst_process('CallProcess', 'process_import_data_time', [], [], ...
                              'subjectname',  subject_name, ...
                              'condition',    condition, ...
@@ -1375,21 +1445,6 @@ for iacq=1:length(acqs_info)
                              'usessp',       0, ...
                              'freq',         [], ...
                              'baseline',     []);
-    elseif endsWith(labchart_fn, 'tsv')
-        % HACK to load TSV file - expect in_fopen_ctf and in_fread_ctf to
-        % be overloaded
-        sFiles = bst_process('CallProcess', 'process_import_data_time', [], [], ...
-            'subjectname',  subject_name, ...
-            'condition',    condition, ...
-            'datafile',     {labchart_fn, 'CTF'}, ...
-            'timewindow',   [], ...
-            'split',        0, ...
-            'ignoreshort',  1, ...
-            'channelalign', 1, ...
-            'usectfcomp',   0, ...
-            'usessp',       0, ...
-            'freq',         [], ...
-            'baseline',     []);
     else
         error('Unsupported file format');
     end
@@ -1411,6 +1466,11 @@ for iacq=1:length(acqs_info)
         end
         % sFile_in = bst_process('GetInputStruct', sFiles);
         process_nst_import_csv_events('import_events', [], sFiles, tag_events);
+    end
+
+    discard_start = [];
+    if isfield(acqs_info, 'crop_start_time')
+        discard_start = acqs_info(iacq).crop_start_time;
     end
 
     if ~isempty(discard_start) && ~isnan(discard_start)
