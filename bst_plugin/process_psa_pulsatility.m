@@ -31,7 +31,7 @@ function sProcess = GetDescription() %#ok<DEFNU>
 sProcess.Comment     = 'Pulsatility';
 sProcess.FileTag     = 'pulsatility';
 sProcess.Category    = 'File';
-sProcess.SubGroup    = 'Pre-process';
+sProcess.SubGroup    = 'PulsAge';
 sProcess.Index       = 1305; %0: not shown, >0: defines place in the list of processes
 sProcess.Description = '';
 sProcess.isSeparator = 0; % add a horizontal bar after the process in
@@ -54,6 +54,22 @@ sProcess.options.use_discard_events.Value      = 0;
 sProcess.options.heart_beat_event.Comment = 'Heart beat event';
 sProcess.options.heart_beat_event.Type    = 'text';
 sProcess.options.heart_beat_event.Value   = 'cardiac';
+
+sProcess.options.flip_sign.Comment = 'Flip sign';
+sProcess.options.flip_sign.Type    = 'checkbox';
+sProcess.options.flip_sign.Value   = 0;
+
+
+sProcess.options.label2.Comment = '<U><B>Function to apply to each epoch signal</B></U>:';
+sProcess.options.label2.Type    = 'label';
+sProcess.options.function.Comment = {'Pulse CBF', ...
+                                     'Time to Pulse CBF', ...
+                                     'Pulse Amplitude:  <FONT color="#777777">(systole - diastole)/diastole</FONT>', ...
+                                     'Heart Rate:  <FONT color="#777777">1/duration*60</FONT>'; ...
+                                     'pCBF', 'tt_pCBF', 'pulse_amplitude', 'heart_rate'};
+sProcess.options.function.Type    = 'radio_label';
+sProcess.options.function.Value   = 'pulse_amplitude';
+
 end
 
 %% ===== FORMAT COMMENT =====
@@ -103,15 +119,29 @@ for iInput=1:length(sInputs)
         chan_idx = chan_indices(iChan);
         sig_chan = sDataIn.F(chan_idx, :)';  % signal 1D pour le canal i
         time_mask_chan = time_mask(chan_idx, :);
+        if sProcess.options.flip_sign.Value
+            sig_chan = sig_chan * -1;
+        end
+
+        switch sProcess.options.function.Value
+            case 'pCBF'
+                func = @gradient_max;
+            case 'tt_pCBF'
+                func = @gradient_argmax;
+            case 'pulse_amplitude'
+                func = @pulse_amplitude;
+            case 'heart_rate'
+                func = @heart_rate;
+        end
         [puls_chan, pulsatility_time] = apply_on_epochs(sig_chan, sDataIn.Time, ...
                                                         time_mask_chan, ...
                                                         events(ievent).times(1,:),...
-                                                        @pulsatility, channel_names{chan_idx});
+                                                        func, channel_names{chan_idx});
         pulsatility(:, iChan) = puls_chan;
     end
 
 
-    iSamples = round(pulsatility_time / diff(sDataIn.Time(1:2)));
+    iSamples = round((pulsatility_time - sDataIn.Time(1))  / diff(sDataIn.Time(1:2)));
     signal_full = sDataIn.F(:, iSamples);
     signal_full(chan_mask, :) = pulsatility';
 
@@ -147,6 +177,9 @@ epoch_samples = round((epoch_times-signal_time(1)) .* sampling_freq) + 1;
 values = NaN(length(epoch_samples)-1, size(signal,2));
 times = zeros(1, length(epoch_samples)-1);
 for iepoch=1:(length(epoch_samples)-1)
+    if epoch_samples(iepoch) == epoch_samples(iepoch+1)
+        error('Epoch too short at %f s', epoch_samples(iepoch)/sampling_freq + signal_time(1))
+    end
     [value, time] = func(signal(epoch_samples(iepoch):epoch_samples(iepoch+1), :), ...
                          signal_time(epoch_samples(iepoch):epoch_samples(iepoch+1)));
     if all(time_mask(epoch_samples(iepoch):epoch_samples(iepoch+1)))
@@ -160,10 +193,30 @@ end
 
 end
 
-function [pulsatility_value, time] = pulsatility(heart_beat_signal, heart_beat_time)
+function [pulsatility_value, time] = pulse_amplitude(heart_beat_signal, heart_beat_time)
     systolic_peak = max(heart_beat_signal);
     diastolic_peak = min(heart_beat_signal);
+
     % resistance index: systolic_peak - diastolic_peak ./ systolic_peak
-    pulsatility_value = (systolic_peak - diastolic_peak) ./ mean(heart_beat_signal);
+    % pulsatility_value = (systolic_peak - diastolic_peak) ./ mean(heart_beat_signal);
+    pulsatility_value = (systolic_peak - diastolic_peak);
     time = heart_beat_time(1) + (heart_beat_time(end) - heart_beat_time(1)) / 2;
+end
+
+function [heart_rate, time] = heart_rate(heart_beat_signal, heart_beat_time)
+    heart_rate = 1/(heart_beat_time(end) - heart_beat_time(1))*60;
+    time = heart_beat_time(1) + (heart_beat_time(end) - heart_beat_time(1)) / 2;
+end
+
+function [pulsatility_value, time] = gradient_max(heart_beat_signal, heart_beat_time)
+    gradient = diff(heart_beat_signal);
+    [pulsatility_value, max_itime] = max(gradient);
+    time = heart_beat_time(max_itime);
+end
+
+function [pulsatility_value, time] = gradient_argmax(heart_beat_signal, heart_beat_time)
+    gradient = diff(heart_beat_signal);
+    [~, max_itime] = max(gradient);
+    time = heart_beat_time(max_itime);
+    pulsatility_value = time;
 end

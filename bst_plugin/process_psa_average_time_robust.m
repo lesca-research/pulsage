@@ -110,6 +110,10 @@ end
 A = zeros(size(sInput.A, 1), 1);
 operation = GetFileTag(sProcess);
 for ichan=1:nb_channels
+    if sInput.ChannelFlag(ichan) ~= 1
+        A(ichan, :, :) = nan;
+        continue;
+    end
     channel_data = sInput.A(ichan, time_mask(ichan, :), :);
     time = sInput.TimeVector(time_mask(ichan, :));
     if sProcess.options.ignore_nans.Value

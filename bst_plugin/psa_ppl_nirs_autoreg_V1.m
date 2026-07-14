@@ -123,21 +123,6 @@ switch action
         varargout{1} = imported_files;
         varargout{2} = redone;
         return;
-    case 'import_nirs'
-        acqs_info = arg1;
-        if isempty(options)
-            options = get_options();
-        end
-        create_dirs(options);
-        [imported_files, redone] = import_nirs_files(acqs_info, options);
-        %import_markings(imported_files(redone==1), subject_names(redone==1), options);
-        % Just in case markings changed in files that were not reimported, save them:
-        %export_markings(imported_files(redone==0), subject_names(redone==0), options);
-        
-        varargout{1} = imported_files;
-        varargout{2} = redone;
-        return;
-
     case 'sync_markings'
         if nargin >= 3
             subject_names = arg1;
@@ -212,14 +197,14 @@ switch action
         end
         files_chan_fix2 = files_chan_fix2(~missing_chan_fix);
 
-
-
-        
         files_to_sync = [files_raw files_raw2 files_chan_fix files_chan_fix2];
         
         create_dirs(options);
         sync_markings(files_to_sync, options, sync_mode);
         varargout{1} = files_to_sync;
+        return;
+    case 'detect_heart_beats'
+        detect_heart_beats(arg1, options)
         return;
     case 'analyse'
 
@@ -227,21 +212,12 @@ switch action
         error('Unknown action: %s', action);
 end
 
-
 if isempty(arg1)
     error('Empty input acquisition definitions');
 else
-    if isstruct(arg1)
-        acq_defs = arg1;
-        assert(isfield(acq_defs, 'acq_name'));
-        assert(isfield(acq_defs, 'subject_tag'));
-    else
-        acq_defs = repmat(struct('acq_name', '', 'subject_tag', ''), length(arg1), 1);
-        for iacq=1:length(arg1)
-            acq_defs(iacq).name = arg1{iacq};
-            acq_defs(iacq).subject_tag = arg1{iacq};
-        end
-    end
+    acq_defs = arg1;
+    assert(isfield(acq_defs, 'visit'));
+    assert(isfield(acq_defs, 'subject_name'));
 end
 
 if strcmp(options.save_fig_method, 'export_fig') && ~function_exists('export_fig')
@@ -255,412 +231,410 @@ if protocol_info.UseDefaultAnat~=1
     error('Protocol should use default anatomy for all subjects');
 end
 
-proc_folder = sprintf('proc_%s', get_ppl_tag());
-preproc_folder = sprintf('preproc_%s', get_ppl_tag());
-
-
+if isempty(options.BP_channel_label)
+    error('options.BP_channel_label is undefined');
+end
 BP_channel_label = options.BP_channel_label;
-CBFi_channel_labels = options.CBFi_channel_labels;
 
-% Initialise structure to store all AR indices
-ar_suffixes = {''};
-if ~isempty(options.conditions)     
-    for icond=1:length(options.conditions)
-        ar_suffixes{icond} = ['_' options.conditions{icond}];
-    end
-end
-
-tfa_index_labels = process_psa_tfa('tfa_index_labels');
-ar_index_labels = [{'AR_Mx_mova', 'AR_Mx_block'} tfa_index_labels];
-ar_indices = struct(); 
-ar_indices.Subject = '';
-
-for i_cbfi_chan=1:length(CBFi_channel_labels) %itération sur chaque channels NIRS
-    cbfi_chan_label = CBFi_channel_labels{i_cbfi_chan};
-    for i_ar_index=1:length(ar_index_labels)
-        ar_index_label = ar_index_labels{i_ar_index};
-        for isuffix=1:length(ar_suffixes)
-            ar_chan_index_label = protect_field_label([ar_index_label '_' ...
-                                                  cbfi_chan_label ...
-                                                  ar_suffixes{isuffix}]);
-            ar_indices.(ar_chan_index_label) = nan;
-        end
-    end
-end
-
-pulsatility_indices = struct(); % for table
-
-
+all_features = dictionary();
+ppl_tag = get_ppl_tag();
 for iacq=1:length(acq_defs)
-    acq_name = acq_defs(iacq).acq_name;
-    subject_tag = acq_defs(iacq).subject_tag;
-
-    fprintf('Processing %s\n', acq_name);
-
-    % NIRS Motion correction
-    preproc_nirs_folder = ['preproc_nirs' get_ppl_tag()];
+    subject_name = acq_defs(iacq).subject_name;
+    visit = acq_defs(iacq).visit;
     
-    % Lacbchart preproc
-    origin_labchart_folder = ['origin_labchart' get_ppl_tag()];
-    preproc_labchart_folder = ['preproc_labchart' get_ppl_tag()];
+    fprintf('Processing %s - %s\n', subject_name, visit);
 
-    file_raw_labchart = nst_get_bst_func_files(acq_name, origin_labchart_folder, 'Raw');
-    if isempty(file_raw_labchart)
-        warning('Cannot find "origin_labchart/Raw" data for "%s".', acq_name);
-        continue;
-    elseif iscell(file_raw_labchart) && length(file_raw_labchart) > 1
-        warning('Expect only 1 raw file "origin_labchart/Raw", but %d found for "%s".',  ...
-            length(file_raw_labchart), acq_name);
-        continue;
-    end
+    orig_cond_nirs = [visit '_origin_nirs' ppl_tag];
+    file_nirs_raw = nst_get_bst_func_files(subject_name, orig_cond_nirs , 'Raw');
+    file_nirs_raw = file_nirs_raw{1};
+    orig_cond_aux = [visit '_origin_aux' ppl_tag];
+    file_aux_raw = nst_get_bst_func_files(subject_name, orig_cond_aux , 'Raw');
+    file_aux_raw = file_aux_raw{1};
 
-    if iscell(file_raw_labchart)
-        file_raw_labchart = file_raw_labchart{1};
-    end
-        
-    data_tmp = in_bst_data(file_raw_labchart, 'Events');
-    events = data_tmp.Events;
+    % Remove duplicate sync triggers
+    nirs_time = in_bst(file_nirs_raw, 'Time');
+    bst_process('CallProcess', 'process_evt_multiresp', ...
+                 file_nirs_raw, [], ...
+                'responses', options.sync_event.nirs, ...
+                'dt',        diff(nirs_time(1:2)), ...
+                'action',    1, ...  % Keep only the first event
+                'rename',    0);
+    nirs_mat = in_bst_data(file_nirs_raw, 'Events');
+    nirs_events = nirs_mat.Events;
 
-    [~, iStudy] = bst_get('AnyFile', file_raw_labchart);
-    sChannel = bst_get('ChannelForStudy', iStudy);
-    channels = in_bst_channel(sChannel.FileName);
-    channel_labels = {
-    'S1D1WL756', 'S3D1WL756', 'S4D1WL756', 'S3D2WL756', 'S4D2WL756', ...
-    'S5D2WL756', 'S4D3WL756', 'S5D3WL756', 'S6D3WL756', 'S5D4WL756', ...
-    'S6D4WL756', 'S7D4WL756', 'S6D5WL756', 'S7D5WL756', 'S8D5WL756', ...
-    'S7D6WL756', 'S8D6WL756', 'S9D6WL756', 'S8D7WL756', 'S9D7WL756', ...
-    'S11D7WL756', 'S2D8WL756', 'S10D9WL756', 'S1D1WL853', 'S3D1WL853', ...
-    'S4D1WL853', 'S3D2WL853', 'S4D2WL853', 'S5D2WL853', 'S4D3WL853', ...
-    'S5D3WL853', 'S6D3WL853', 'S5D4WL853', 'S6D4WL853', 'S7D4WL853', ...
-    'S6D5WL853', 'S7D5WL853', 'S8D5WL853', 'S7D6WL853', 'S8D6WL853', ...
-    'S9D6WL853', 'S8D7WL853', 'S9D7WL853', 'S11D7WL853', 'S2D8WL853', ...
-    'S10D9WL853'
-    };
- %not sure if I should run the pipeline for both lamda
-% or =opts.psa.CBFi_channel_labels
-% 
-    
+    aux_time = in_bst(file_aux_raw, 'Time');
+    bst_process('CallProcess', 'process_evt_multiresp', ...
+                 file_aux_raw, [], ...
+                'responses', options.sync_event.aux, ...
+                'dt',        diff(aux_time(1:2)), ...
+                'action',    1, ...  % Keep only the first event
+                'rename',    0);
+    aux_mat = in_bst_data(file_aux_raw, 'Events');
+    aux_events = aux_mat.Events;
 
-
-    disp('Tous les canaux disponibles dans le fichier :');
-    disp({channels.Channel.Name}');
-    cfbi_idx_chans = find(ismember(channel_labels, CBFi_channel_labels));
-
-
-
-
-
-
-
-    chan_fix_item = [acq_name '/' preproc_labchart_folder '/Raw_Fix' ];
-    existing_file = nst_get_bst_func_files(acq_name, preproc_labchart_folder, 'Events_delete_duplicated_item');
-    
-    if ~isempty(existing_file)
-        sFile_labchart_hb = existing_file;
-        redone = 0;
-        fprintf('Skip duplication: Raw_Fix already exists for %s\n', acq_name);
-    else
-        [sFile_labchart_hb, redone] = nst_run_bst_proc(chan_fix_item, 0, ...
-                                                'process_duplicate', file_raw_labchart, [], ...
-                                                'target', 1, ...  % Duplicate data files
-                                                'tag',    '_copy');
-    end
-        
-        
-
-
-
-
-
-
-
-    if options.heart_beats.do
-        detect_heart_beats(sFile_labchart_hb, ...
-                           options.heart_beats.ecg_channel_labels, ...
-                           options.heart_beats.event_name);
-    end
-
-    if options.do_preproc_only
-        continue
-    end
-    
-    
-
-
-
-    % Merge NIRs + labchart (TODO)
-    % === Duplicate to new condition
-    process_folder = ['process' get_ppl_tag()];
-    target_item = [acq_name '/' process_folder '/Raw'];
-    
-    
-    
-    file_raw_nirs = nst_get_bst_func_files(acq_name, ['origin_nirs' get_ppl_tag()], 'Raw');
-
-   
-    
-    
-    
-    chan_fix_item = [acq_name '/' preproc_nirs_folder '/Raw_Fix' ];
-    existing_file = nst_get_bst_func_files(acq_name, preproc_nirs_folder, 'Events_uploaded');
-    
-    if ~isempty(existing_file)
-        file_nirs_moco = existing_file;
-        redone = 0;
-        fprintf('Skip duplication: Raw_Fix already exists for %s\n', acq_name);
-    else
-        [file_nirs_moco, redone] = nst_run_bst_proc(chan_fix_item, 0, ...
-                                                'process_duplicate', file_raw_nirs, [], ...
-                                                'target', 1, ...  % Duplicate data files
-                                                'tag',    '_copy');
-    end
-        
-        
-        
-        
-    
-    
-    
-    
-    
-    % Renaming events before merging 
-    % List of event names to rename as 'Z'
-    rename_to_Z_list = {'labchart sync'};  % Add more names here if needed
-    % Load existing events
-    data_evt_nirs = in_bst_data(file_raw_nirs, 'Events');
-    event_labels_nirs = {data_evt_nirs.Events.label};
-    
-    % Loop over list and rename if present
-    for iName = 1:length(rename_to_Z_list)
-        src_evt = rename_to_Z_list{iName};
-        if any(strcmp(event_labels_nirs, src_evt))
-            file_nirs_moco = bst_process('CallProcess', 'process_evt_rename', file_nirs_moco, [], ...
-                'src',   src_evt, ...
-                'dest',  'Z');
-            fprintf('Événement "%s" renommé en "Z" dans %s\n', src_evt, file_nirs_moco.FileName);
-            break; 
-        end
-    end
-
-    % Process: Detect multiple responses and keep one
-    evt_delete_double_item = [acq_name '/' 'preproc_labchart__psanar_V1' '/Events_delete_duplicated_item'];
-    [file_nirs_proc, ~]= nst_run_bst_proc(evt_delete_double_item,0,'process_evt_multiresp',sFile_labchart_hb, [], ...
-                                            'responses', 'CMT oxysoft sync', ...
-                                            'dt',        0.001, ...
-                                            'action',    1, ...  % Keep only the first event
-                                            'rename',    0);
-    
-    % === Merge events into new copy
-    evt_sync_item = [acq_name '/' 'preproc_nirs__psanar_V1' '/Events_uploaded'];
-    [file_nirs_proc, ~] = nst_run_bst_proc(evt_sync_item, 0, ...
-                                           'process_evt_transfer', ...
-                                            sFile_labchart_hb, file_nirs_moco, ...
-                                            'src',  'CMT oxysoft sync', ...
-                                            'dest', 'Z');
-
-    
-    
-    continue
-    
-    sFiles_cond = {};
-    prefixes = {};
-    suffixes = {};
+    % Insure that conditions have been tagged
     if ~isempty(options.conditions)
-        for icond=1:length(options.conditions)
-            condition = options.conditions{icond};
-            idx_event_cond = find(strcmp(condition, {events.label}));
-            if isempty(idx_event_cond) || isempty(events(idx_event_cond).times)
-                continue
-            end
-            %condition = ['sync ' options.conditions];
-          
-            %Importation de rest_RAW et stand_Raw dans proc__psanar_V1
-            raw_cond_item = [acq_name '/' proc_folder '/' condition '_Raw' ];
-            [sFile_cond, redone] = nst_run_bst_proc(raw_cond_item, 0, ...
-                                                    'process_import_data_event', file_nirs_proc, [], ...
-                                                    'subjectname',   acq_name, ...
-                                                    'condition', '', ...
-                                                    'eventname',  condition, ...
-                                                    'timewindow',    [], ...
-                                                    'epochtime',     [-0.1, 0.3], ...
-                                                    'split',         0, ...
-                                                    'createcond',    0, ...
-                                                    'ignoreshort',   0, ...
-                                                    'usectfcomp',    0, ...
-                                                    'usessp',        0, ...
-                                                    'freq',          [], ...
-                                                    'baseline',      [], ...
-                                                    'blsensortypes', 'MEG, EEG');
-            if isempty(sFile_cond)
-                continue
-            end
-            
-            sFiles_cond{end+1} = sFile_cond;
-            prefixes{end+1} = [condition '_'];
-            suffixes{end+1} = ['_' condition];
+        if isempty([aux_events(ismember({aux_events.label}, options.conditions)).times])
+            error('Condition (%s) not tagged in %s/%s/Raw', strjoin(options.conditions, ', '), ...
+                subject_name, orig_cond_aux);
+        elseif ~isempty([nirs_events(ismember({nirs_events.label}, options.conditions)).times])
+            error('Condition should not be tagged in both nirs and aux');
         end
-    else
-        raw_copy_item = [acq_name '/' proc_folder '/' 'Raw' ];
-        [sFile_cond, redone] = nst_run_bst_proc(raw_copy_item, 0, ...
-                                                'process_duplicate', sFile_chan_fix, [], ...
-                                                'target', 1, ...  % Duplicate data files
-                                                'tag',    '_copy');
-
-        sFiles_cond = {sFile_cond};
-        prefixes = {''};
-        suffixes = {''};
     end
+    % Synchronise NIRS onto AUX
+    if ismember(options.sync_event.nirs, {nirs_events.label})
+        if ~ismember(options.sync_event.aux, {aux_events.label})
+            error('%s not found in aux events', options.sync_event.aux);
+        end
+        file_nirs_sync = nst_run_bst_proc(fmt_item(visit, 'procs', 'nirs', 'Raw_sync_aux'), 0, ...
+                                         'process_psa_synchronise',  file_nirs_raw, file_aux_raw, ...
+                                         'src',  options.sync_event.nirs, ...
+                                         'dest', options.sync_event.aux, ...
+                                         'transfer_events', strjoin([options.sync_event.aux options.conditions options.heart_beats.event_name], ','));
+        sync_ok = true;
+    else
+        warning('No sync event available. Autoregulation will not be computed.');
+        sync_ok = false;
+        file_nirs_sync = file_nirs_raw;
+    end
+    data_nirs_tmp = in_bst_data(file_nirs_sync, 'Events', 'Time');
+    nirs_events = data_nirs_tmp.Events;
+
+    % NIRS: Crop trailing segments tagged with event "discard"
+    idiscard_evt = strcmp('discard', {nirs_events.label});
+    file_nirs_discard = file_nirs_sync;
+    if any(idiscard_evt) && ~isempty(nirs_events(idiscard_evt).times)
+        discard_evt = nirs_events(idiscard_evt);
+        data_time = in_bst_data(file_nirs_sync, 'Time');
+        time_window = [0 data_time.Time(end)];
+        if discard_evt.times(1,1)==data_time.Time(1)
+            time_window(1) = discard_evt.times(2,1);
+            discard_evt.times(:,1) = [];
+        end
+        if ~isempty(discard_evt.times) && discard_evt.times(2,end) == data_time.Time(end)
+            time_window(2) = discard_evt.times(1,end);
+            discard_evt.times(:,end) = [];
+        end
+        if time_window(1) ~= 0 || time_window(2) ~= data_time.Time(end)
+            file_nirs_discard = nst_run_bst_proc(fmt_item(visit, 'procs', 'nirs', 'Discard'), 0, ...
+                                                  'process_extract_time', file_nirs_raw_proc, [], ...
+                                                  'timewindow', time_window, ...
+                                                  'overwrite',  0);
+            bst_process('CallProcess', 'process_evt_delete', file_nirs_discard, [], ...
+                        'eventname', 'discard');
+            if ~isempty(discard_evt)
+                events_tmp = db_template('event');
+                events_tmp(idiscard_evt) = discard_evt;
+                sInput_tmp.FileType = 'data';
+                sInput_tmp.FileName = sFile_cropped_discard;
+                process_nst_import_csv_events('import_events', [], sInput_tmp, events_tmp);
+            end
+        end
+    end
+    % NIRS Deglitching
+    file_nirs_deglitched = nst_run_bst_proc(fmt_item(visit, 'procs', 'nirs', 'Deglitched'), 0, ...
+                                            'process_nst_deglitch', file_nirs_discard, [], ...
+                                            'factor_std_grad', options.deglitch.agrad_std_factor);
     
-    i_ar_index = length(pulsatility_indices) + 1;
+    % NIRS Motion corrections
+    file_nirs_moco = nst_run_bst_proc(fmt_item(visit, 'procs', 'nirs', 'Moco'), 0, ...
+                                     'process_nst_motion_correction', file_nirs_deglitched, [], ...
+                                     'option_event_name', 'movement_artefacts');
+    [sFiles_nirs_conds, conds] = split_by_condition(file_nirs_moco, options.conditions, 'Moco');
 
-    for ifile=1:length(sFiles_cond)
-        % Fill gaps
-        sFile_fgaps = sFiles_cond{ifile};
-        prefix = prefixes{ifile};
-        suffix = suffixes{ifile};
-
-        
-        tag_inversion = [prefix '_INV_nirs'];
-        study = bst_get('StudyWithCondition', [acq_name '/' proc_folder]);
-        existing_comments = {study.Data.Comment};
-        
-        if ~any(strcmp(existing_comments, tag_inversion))
-            % Process: Opposite values
-            sFiles = bst_process('CallProcess', 'process_opposite', sFile_fgaps, [], ...
-                                 'sensortypes', 'NIRS', ...
-                                 'overwrite', 0);
-        
-            
-            % Process: Set name: _INV_nirs
-            sFiles = bst_process('CallProcess', 'process_set_comment', sFiles, [], ...
-                                 'tag', tag_inversion, ...
-                                 'isindex', 1);%1 POUR NUMERICAL INDEX
-        else
-            % Récupérer le fichier existant
-            sFiles = bst_process('CallProcess', 'process_select_files_data', [], [], ...
-                                 'subjectname', acq_name, ...
-                                 'condition',   proc_folder, ...
-                                 'tag',         tag_inversion, ...
-                                 'includebad',  0, ...
-                                 'includeintra', 0);
+    if sync_ok
+        % BP gap filling
+        [~, iStudy] = bst_get('AnyFile', file_aux_raw);
+        sChannel = bst_get('ChannelForStudy', iStudy);
+        channels = in_bst_channel(sChannel.FileName);
+        channel_labels = {channels.Channel.Name};
+        gap_ichannel = find(~cellfun(@isempty, regexp(channel_labels, BP_channel_label)));
+        if isempty(gap_ichannel)
+            error('No channel matching %s for gap filling', BP_channel_label);
         end
+        fgap_item = fmt_item(visit, 'procs', 'aux', 'BP_gap_filled');
+        [file_aux_fgaps, ~] = nst_run_bst_proc(fgap_item, 0, ...
+                                            'process_psa_fill_gaps', file_aux_raw, [], ...
+                                            'option_event_name',  'BP_gap', ...
+                                            'option_channels',    BP_channel_label, ...
+                                            'option_ar_win_size', options.fill_gaps.ar_win_size_sec, ...
+                                            'option_ar_order',    options.fill_gaps.ar_order_sec);            
 
-        tag_motion_correction = [prefix '_motion_correct_nirs'];
-        if ~any(strcmp(existing_comments, tag_motion_correction))
-            sFiles = bst_process('CallProcess','process_nst_motion_correction', sFiles, [], ...
-                                                      'option_event_name', 'movement_artefacts');
+        [sFiles_aux_conds, aux_conds] = split_by_condition(file_aux_fgaps, options.conditions, 'BP_gap_filled');
+    
 
-            % Process: Set name: _NORM_nirs
-            sFiles = bst_process('CallProcess', 'process_set_comment', sFiles, [], ...
-                                 'tag', tag_motion_correction, ...
-                                 'isindex', 1);%1 POUR NUMERICAL INDEX
-        else
-            sFiles = bst_process('CallProcess', 'process_select_files_data', [], [], ...
-                                 'subjectname', acq_name, ...
-                                 'condition',   proc_folder, ...
-                                 'tag',         tag_motion_correction, ...
-                                 'includebad',  0, ...
-                                 'includeintra', 0);
+        if length(conds) ~= length(aux_conds)
+            error('Inconsitent conditions between nirs (%s) and aux (%s)', ...
+                  none_str(strjoin(conds, ', ')), none_str(strjoin(aux_conds, ', ')));
         end
+    end
 
-
-
-
-        tag_normalisation = [prefix '_NORM_nirs'];
-        if ~any(strcmp(existing_comments, tag_normalisation))
-            % Process: Scale with the mean: [All file]
-            sFiles = bst_process('CallProcess', 'process_baseline_norm', sFiles, [], ...
-                                 'baseline', [], ...
-                                 'sensortypes', 'NIRS', ...
-                                 'method', 'divmean', ...% Scale with the mean:    x_std = x / &mu;
-                                 'overwrite', 0);
-            % Process: Set name: _NORM_nirs
-            sFiles = bst_process('CallProcess', 'process_set_comment', sFiles, [], ...
-                                 'tag', tag_normalisation, ...
-                                 'isindex', 1);%1 POUR NUMERICAL INDEX
-        else
-            sFiles = bst_process('CallProcess', 'process_select_files_data', [], [], ...
-                                 'subjectname', acq_name, ...
-                                 'condition',   proc_folder, ...
-                                 'tag',         tag_normalisation, ...
-                                 'includebad',  0, ...
-                                 'includeintra', 0);
+    % Pulsatility NIRS
+    % ASSUME: cardiac events have been finalised, either using aux ECG or
+    %         directly from NIRS
+    for icond=1:length(sFiles_nirs_conds)
+        condition = conds{icond};
+        sFile_nirs = sFiles_nirs_conds{icond};
+        [pfile, pfeature_means, pfeature_labels] = pulsatility_pipeline(sFile_nirs, condition, options.heart_beats.event_name);
+        for ifeature=1:length(pfeature_labels)
+            key = {{subject_name, visit, [pfeature_labels{ifeature} '_' condition]}};
+            all_features(key) = pfeature_means(ifeature);
         end
+    end
 
+    if ~sync_ok
+        continue % don't do autoregulation
+    end
 
-        tag_filtre = [prefix '_FILTERED_nirs'];
-        if ~any(strcmp(existing_comments, tag_filtre))
-            % Process: Band-pass:0.5Hz-5Hz
-            sFiles = bst_process('CallProcess', 'process_bandpass', sFiles, [], ...
-                                 'sensortypes', 'NIRS', ...
-                                 'highpass',    0.5, ...
-                                 'lowpass',     5, ...
-                                 'tranband',    0, ...
-                                 'attenuation', 'strict', ... % 60dB
-                                 'ver',         '2019', ...
-                                 'mirror',      0, ...
-                                 'overwrite',   0);
-            % Process: Set name: _NORM_nirs
-            sFiles = bst_process('CallProcess', 'process_set_comment', sFiles, [], ...
-                                 'tag', tag_filtre, ...
-                                 'isindex', 1);% Process: Set name: _NORM_nirs
-        else
-            sFiles = bst_process('CallProcess', 'process_select_files_data', [], [], ...
-                                 'subjectname', acq_name, ...
-                                 'condition',   proc_folder, ...
-                                 'tag',         tag_filtre, ...
-                                 'includebad',  0, ...
-                                 'includeintra', 0);
-        end
-
-
-
-        
-        if options.pulsatility.do
-            pulsatility_item = [acq_name '/' proc_folder '/' prefix 'pulsatility' ];
-
-            [sFile_puls, redone] = nst_run_bst_proc(pulsatility_item, 0, ...
-                                                    'process_psa_pulsatility', sFiles, [], ...
-                                                    'timewindow',    [], ...
-                                                    'channelnames',  strjoin(channel_labels(cfbi_idx_chans), ','), ...
-                                                    'heart_beat_event', 'sync cardiac', ...
-                                                    'timeres',       'none', ...  % None
-                                                    'avgwinlength',  1, ...
-                                                    'avgwinoverlap', 50, ...
-                                                    'scalarprod',    0, ...
-                                                    'outputmode',    'input');  % separately for each file
-
-            %Extrait les statistiques de l'indice de pulsatilité pour chaque canal valide
-            % pour chaque canal CBFi valide (non marqué "bad") dans le fichier Brainstorm correspondant.
-            % Les résultats sont stockés dans les structures ar_indices et pulsatility_indices pour export ultérieur.
-            [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( sFile_puls, cfbi_idx_chans, channel_labels, ar_indices, ...
-                                                    pulsatility_indices, i_ar_index, subject_tag, suffix);
-            
-        end
-    end % end of loop over conditions (eg rest, stand)
+    for icond=1:length(sFiles_nirs_conds)
+        condition = conds{icond};
+        sFile_nirs = sFiles_nirs_conds{icond};
+        sFile_aux = sFiles_aux_conds{icond};
+        % TODO expose option for pct filter
+        mx_item = fmt_item(visit, 'procs', 'nirs', [condition '_Mx']);
+        [sFile_mx, redone] = nst_run_bst_proc(mx_item, 0, ...
+                                              'process_psa_mx2', sFile_nirs, sFile_aux, ...
+                                              'abp_channel', BP_channel_label);
+        [~, iStudy] = bst_get('AnyFile', sFile_mx);
+        sChannel = bst_get('ChannelForStudy', iStudy);
+        channels = in_bst_channel(sChannel.FileName);
+        channels_selection = strjoin({channels.Channel(endsWith({channels.Channel.Name}, 'WL853')).Name}, ',');
+        mx_mean = channel_average(sFile_mx, 0.02, channels_selection, 5);
+        key = {{subject_name, visit, ['Mx_' condition]}};
+        all_features(key) = mx_mean;
+    end
 end % end of loop over acquisitions
 
-if ~options.do_preproc_only
-    ar_table = struct2table(ar_indices, 'AsArray', true); %just added ", 'AsArray', true"
-    ar_table_fn = fullfile(options.result_dir, 'autoregulation_indices.tsv');
-    write_log(['Save AR index table to ' ar_table_fn '\n']);
-    writetable(ar_table, ar_table_fn, 'WriteRowNames', true, ...
-              'Delimiter', 'tab', ...
-              'FileType', 'text'); 
-              
-              
-    if options.pulsatility.do     
-        pulsatility_table = struct2table(pulsatility_indices);
-        pulsatility_table_fn = fullfile(options.result_dir, 'pulsatility_indices.tsv');
-        write_log(['Save AR index table to ' ar_table_fn '\n']);
-        disp(pulsatility_indices);
-        writetable(pulsatility_table, pulsatility_table_fn, 'WriteRowNames', true, ...
-                  'Delimiter', 'tab', ...
-                  'FileType', 'text');
-        % Génère le graphique à barres groupées à partir du fichier .tsv
-        %plot_grouped_pulsatility_avg(pulsatility_table_fn);
+%% Export to Excel
+feature_table = dict_to_table(all_features, {'subject_id', 'visit'});
+outputFile = fullfile(options.result_dir, 'hemodynamics.xlsx');
+writetable(feature_table, outputFile, 'Sheet', 'Hemodynamics_Features');
+fprintf('Wrote %d rows and %d columns to %s\n', ...
+        height(feature_table), width(feature_table), outputFile);
+
+end % end main pipeline function
+
+
+function table_out = dict_to_table(dict, var_names)
+
+allKeys     = keys(dict);     % cell array of 1×4 cells
+allMeasures = values(dict);   % numeric column vector
+
+% Unpack each heterogeneous key into its components
+n_entries = numel(allKeys);
+
+% Pre-allocate index columns as cells (since types may vary)
+nb_vars = length(var_names);
+columns = cell(nb_vars, n_entries);
+labelCol = strings(n_entries, 1);   % measure_label is always a string
+
+for i_entry = 1:n_entries
+    thisKey = allKeys{i_entry};
+    if length(thisKey)-1 ~= nb_vars
+        error('Entry size in dict inconstistent with number of given variables');
+    end
+    for  icol=1:nb_vars
+        columns{icol, i_entry} = thisKey{icol};
+    end
+    labelCol(i_entry) = string(thisKey{icol+1});
+end
+
+% Convert each index column to its most natural MATLAB type
+columns_normed = cell(n_entries, nb_vars+2);
+for icol=1:nb_vars
+    col = normalizeColumn(columns(icol, :));
+    for i_entry=1:n_entries
+        columns_normed{i_entry, icol} = col{i_entry};
     end
 end
+for i_entry=1:n_entries
+    columns_normed{i_entry, icol+1} = labelCol{i_entry};
+    columns_normed{i_entry, icol+2} = allMeasures(i_entry);
+end
+% Long-format table
+table_long = cell2table(columns_normed, 'VariableNames', [var_names {'measure_label','measure_value'}]);
+
+% Pivot to wide format: one column per measure label
+table_out = unstack(table_long, 'measure_value', 'measure_label');
+end
+
+%% Helper: collapse a cell column to a homogeneous type when possible
+function out = normalizeColumn(c)
+    % If every element is numeric scalar, return a numeric column.
+    % If every element is char/string, return a string column.
+    % Otherwise, leave it as a cell column (mixed types).
+    
+    isAllNumeric = all(cellfun(@(x) isnumeric(x) && isscalar(x), c));
+    isAllText    = all(cellfun(@(x) ischar(x) || isstring(x), c));
+    
+    if isAllNumeric
+        out = cell2mat(c);
+    elseif isAllText
+        out = string(c);
+    else
+        out = c;   % keep heterogeneous as cell
+    end
+end
+
+function s = none_str(s)
+if isempty(s)
+    s = 'none';
+end
+end
+
+function [subject_name, proc_folder] = parse_bst_file(bst_file)
+tokens = strsplit(bst_file, '/');
+proc_folder = tokens{2};
+subject_name = tokens{1};
+end
+
+function [sFile_features_avg, feature_means, feature_labels] = pulsatility_pipeline(file_moco, tag, cardiac_event_label)
+[subject_name, proc_folder] = parse_bst_file(file_moco);
+if isempty(tag)
+    prefix = '';
+else
+    prefix = [tag '_'];
+end
+item_prefix = [subject_name '/' proc_folder '/' prefix];
+[sFile_baseline, redone] = nst_run_bst_proc([item_prefix 'baseline_LP'], 0, ...
+                                             'process_bandpass', file_moco, [], ...
+                                             'sensortypes', 'NIRS', ...
+                                             'highpass',    0, ...
+                                             'lowpass',     0.6, ...
+                                             'tranband',    0, ...
+                                             'attenuation', 'strict', ... % 60dB
+                                             'ver',         '2019', ...
+                                             'mirror',      0, ...
+                                             'overwrite',   0);
+if isempty(tag)
+    condition_tag = 'lp_normed';
+else
+    condition_tag = tag;
+end
+division_code = ['Data = (DataA ./ DataB - 1)*100;' 10 'Condition = ''' condition_tag ''';'];
+[sFile_normed, ~] = nst_run_bst_proc([item_prefix 'LP_normalised'], 0, ...
+                                          'process_matlab_eval2', file_moco, sFile_baseline, ...
+                                          'matlab', division_code, ...
+                                          'sensortypes', 'NIRS');
+channels = in_bst_channel(bst_get('ChannelFileForStudy', sFile_normed));
+separations = process_nst_separations('Compute', channels.Channel);
+
+feature_labels = {'pulse_amplitude', 'tt_pCBF', 'pCBF', 'heart_rate'};
+feature_means = zeros(length(feature_labels), 1);
+sFile_features_avg = {};
+for ifeature=1:length(feature_labels)
+    feature = feature_labels{ifeature};
+    [sFile_feat, ~] = nst_run_bst_proc([item_prefix feature], 0, ...
+                                            'process_psa_pulsatility', sFile_normed, [], ...
+                                            'timewindow',    [], ...
+                                            'channelnames',  'NIRS', ...
+                                            'heart_beat_event', cardiac_event_label, ...
+                                            'flip_sign', 1, ...
+                                            'function', feature);
+    [sFile_feat_avg, redone] = nst_run_bst_proc([item_prefix feature '_avg'], 0, ...
+                                                'process_psa_average_time_robust', sFile_feat, [], ...
+                                                'pct_filter_range', [25, 75], ...
+                                                'use_discard_events',   0, ...
+                                                'avg_func',  'mean', ...  % Arithmetic average:  mean(x)
+                                                'overwrite',        0);
+    sFile_features_avg{ifeature} = sFile_feat_avg;
+    channels_selection = strjoin({channels.Channel(endsWith({channels.Channel.Name}, 'WL853')).Name}, ',');
+    % % Compute average across all channels
+    % feature_avg_data = in_bst(sFile_feat_avg);
+    % idx_chans = channel_find(channels.Channel, 'NIRS');
+    % mask_good_chans = false(size(feature_avg_data.ChannelFlag, 1), 1);
+    % mask_good_chans(idx_chans) = 1;
+    % % TODO expose wavelength of interest
+    % % TODO expose separation threshold
+    % mask_good_chans(separations < 0.02) = 0;
+    % mask_good_chans(~endsWith({channels.Channel.Name}, 'WL853')) = 0;
+    % mask_good_chans(feature_avg_data.ChannelFlag~=1) = 0;
+    % %TODO filter by SCI
+    % feature_data = feature_avg_data.F(mask_good_chans', 1);
+    % nb_channels = size(feature_data, 1);
+    % low = max(1, round(0.05 * nb_channels));
+    % high = round(.95 * nb_channels);
+    % [sorted_data, sort_idx] = sort(feature_data);
+    % feature_mean = mean(sorted_data(low:high));
+    feature_means(ifeature) = channel_average(sFile_feat_avg, 0.02, channels_selection, 5);
+end
+end
+
+function feature_mean = channel_average(data_file, separation_max, channels_selection, pct_filter)
+
+% Compute average across all channels
+channels = in_bst_channel(bst_get('ChannelFileForStudy', data_file));
+separations = process_nst_separations('Compute', channels.Channel);
+data = in_bst(data_file);
+idx_chans = channel_find(channels.Channel, channels_selection);
+mask_good_chans = false(size(data.ChannelFlag, 1), 1);
+mask_good_chans(idx_chans) = 1;
+% TODO expose wavelength of interest
+% TODO expose separation threshold
+mask_good_chans(separations < separation_max) = 0;
+% mask_good_chans(~endsWith({channels.Channel.Name}, 'WL853')) = 0;
+mask_good_chans(data.ChannelFlag~=1) = 0;
+%TODO filter by SCI
+feature_data = data.F(mask_good_chans', 1);
+nb_channels = size(feature_data, 1);
+pct_filter = pct_filter/100;
+low = max(1, round(pct_filter * nb_channels));
+high = round((1-pct_filter) * nb_channels);
+[sorted_data, sort_idx] = sort(feature_data);
+feature_mean = mean(sorted_data(low:high));
+end
+
+function [output_files, output_conditions] = split_by_condition(data_file, conditions, tag)
+data_mat = in_bst_data(data_file, 'Events');
+events = data_mat.Events;
+[subject_name, proc_folder] = parse_bst_file(data_file);
+if ~isempty(conditions)
+    output_files = {};
+    output_conditions = {};
+    for icond=1:length(conditions)
+        condition = conditions{icond};
+        idx_event_cond = find(strcmp(condition, {events.label}));
+        if isempty(idx_event_cond) || isempty(events(idx_event_cond).times)
+            continue
+        end
+        raw_cond_item = [subject_name '/' proc_folder '/' condition '_' tag];
+        [sFile_cond, ~] = nst_run_bst_proc(raw_cond_item, 0, ...
+                                                'process_import_data_event', data_file, [], ...
+                                                'subjectname',   subject_name, ...
+                                                'condition', proc_folder, ...
+                                                'eventname',  condition, ...
+                                                'timewindow',    [], ...
+                                                'epochtime',     [-0.1, 0.3], ...
+                                                'split',         0, ...
+                                                'createcond',    0, ...
+                                                'ignoreshort',   0, ...
+                                                'usectfcomp',    0, ...
+                                                'usessp',        0, ...
+                                                'freq',          [], ...
+                                                'baseline',      [], ...
+                                                'blsensortypes', 'MEG, EEG');
+        if isempty(sFile_cond)
+            continue
+        end
+        
+        output_files{end+1} = sFile_cond;
+        output_conditions{end+1} = condition;
+    end
+else
+    [data_file_dup, ~] = nst_run_bst_proc([subjet_name '/' proc_folder '/Raw' ], 0, ...
+                                            'process_duplicate', data_file, [], ...
+                                            'target', 1, ...  % Duplicate data files
+                                            'tag', '_copy');
+
+    output_files = {data_file_dup};
+    output_conditions = {''};
+end
+
+end
+
+function item=fmt_item(visit, proc, signal_type, tag)
+    item = sprintf('%s_%s_%s%s/%s', visit, proc, signal_type,...
+                   get_ppl_tag(), tag);
 end
 
 function create_template(nirs_fn)
@@ -717,29 +691,85 @@ end
 end
 
 
-function detect_heart_beats(sFile, ecg_channel_labels, heart_beat_event_name)
-sEvents = in_bst_data(sFile, 'Events');
-if ~ismember(heart_beat_event_name, {sEvents.Events.label})
-    bst_process('CallProcess', 'process_evt_detect_multi_ecg', sFile, [], ...
-                'channelnames', strjoin(ecg_channel_labels, ', '), ...
-                'timewindow',   [], ...
-                'dt',           0.05, ...
-                'eventname',    heart_beat_event_name);
+
+function add_default_nirs_events(sFile, options)
+if ~isstruct(sFile)
+    sFile = bst_process('GetInputStruct', sFile);
+end
+warning off MATLAB:load:variableNotFound
+data_tmp = in_bst_data(sFile.FileName, 'Events');
+warning on MATLAB:load:variableNotFound
+if ~isempty(data_tmp.Events)
+    data_event_labels = {data_tmp.Events.label};
+else
+    data_event_labels = {};
+end
+tag_events = db_template('event');
+
+ievt = 1;
+if ~ismember('movement_artefacts', data_event_labels)
+    tag_events(ievt).label = 'movement_artefacts';
+    tag_events(ievt).times = zeros(2,0);
+    ievt = ievt + 1;
+end
+if ~ismember('discard', data_event_labels)
+    tag_events(ievt).label = 'discard';
+    tag_events(ievt).times = zeros(2,0);
+    ievt = ievt + 1;
+end
+if ievt > 1
+    process_nst_import_csv_events('import_events', [], sFile, ...
+                                  tag_events);
 end
 end
 
+function add_default_aux_events(sFile, options)
+if ~isstruct(sFile)
+    sFile = bst_process('GetInputStruct', sFile);
+end
+warning off MATLAB:load:variableNotFound
+data_tmp = in_bst_data(sFile.FileName, 'Events');
+warning on MATLAB:load:variableNotFound
+if ~isempty(data_tmp.Events)
+    data_event_labels = {data_tmp.Events.label};
+else
+    data_event_labels = {};
+end
+tag_events = db_template('event');
 
-
-
-
+ievt = 1;
+if ~ismember('discard_aux', data_event_labels)
+    tag_events(1).label = 'discard_aux';
+    tag_events(1).times = zeros(2,0);
+    ievt = ievt + 1;
+end
+if ~ismember('BP_gap', data_event_labels)
+    tag_events(ievt).label = 'BP_gap';
+    tag_events(ievt).times = zeros(2,0);
+    ievt = ievt + 1;
+end
+if ~ismember('extrasystole', data_event_labels)
+    tag_events(ievt).label = 'extrasystole';
+    tag_events(ievt).times = zeros(2,0);
+    ievt = ievt + 1;
+end
+for icondition=1:length(options.conditions)
+    if ~ismember(options.conditions{icondition}, data_event_labels)
+        tag_events(ievt).label = options.conditions{icondition};
+        tag_events(ievt).times = zeros(2,0);
+        ievt = ievt + 1;
+    end
+end
+% sFile_in = bst_process('GetInputStruct', sFiles);
+if ievt > 1
+    process_nst_import_csv_events('import_events', [], sFile,...
+                                  tag_events);
+end
+end
 
 function label = protect_field_label(label)
 label = strrep(label, '.', '_dot_');
 end
-
-
-
-
 
 function [sFiles_flat, tags] = flatten_file_list(sFiles)
 tags = {};
@@ -805,6 +835,9 @@ options.do_preproc_only = 0;
 options.heart_beats.do = 1;
 options.heart_beats.ecg_channel_labels = {'ECG I', 'ECG II', 'ECG III'};
 options.heart_beats.event_name = 'cardiac';
+options.heart_beats.good_ecg_event_name = 'good_ecg';
+
+options.BP_channel_label = '';
 
 options.conditions = {};
 options.gaps = struct([]);
@@ -1387,6 +1420,9 @@ end
 
 end
 
+function fm_subject = get_full_head_model_subject_name()
+    fm_subject = ['template' get_ppl_tag()];
+end
 
 % pour le import
 function [files_in, redone_imports] = import_data_files(acqs_info, options)
@@ -1402,92 +1438,198 @@ export_channel(template_ChannelFile, tmp_template_channel_fn, 'BIDS-NIRS-ALS-MM'
 files_in = {};
 redone_imports = [];
 
-condition = ['origin' get_ppl_tag()];
+ppl_tag = get_ppl_tag();
 for iacq=1:length(acqs_info)
     %% Import data
-    labchart_fn = acqs_info(iacq).labchart_fn;
-    subject_name = acqs_info(iacq).acq_name;
-
-    file_raw = nst_get_bst_func_files(subject_name, condition, 'Raw');
-    if ~isempty(file_raw)
-        files_in = [files_in file_raw];
-        redone_imports = [redone_imports 0];
-        continue
+    subject_name = acqs_info(iacq).subject_name;
+    visit = acqs_info(iacq).visit_label;
+    aux_fn = acqs_info(iacq).labchart_fn;
+    nirs_fn = acqs_info(iacq).nirs_fn;
+    
+    condition_nirs = [visit '_origin_nirs' ppl_tag];
+    file_nirs_raw = nst_get_bst_func_files(subject_name, condition_nirs, 'Raw');
+    if isempty(file_nirs_raw)
+        [file_nirs_raw, redone] = nst_run_bst_proc([subject_name '/' condition_nirs '/Raw'], options.import.redo, ...
+                                       'process_import_data_time', [], [], ...
+                                       'subjectname',  subject_name, ...
+                                       'condition',    condition_nirs, ...
+                                       'datafile',     {nirs_fn, 'NIRS-BRS'}, ...
+                                       'timewindow',   [], ...
+                                       'split',        0, ...
+                                       'ignoreshort',  1, ...
+                                       'channelalign', 1, ...
+                                       'usectfcomp',   0, ...
+                                       'usessp',       0, ...
+                                       'freq',         [], ...
+                                       'baseline',     []);
+        % Insure events loaded from NIRS have prefix CMT
+        rename_matching_event(file_nirs_raw, @(s) (~startsWith(s, 'CMT')), ...
+                              @(s) (['CMT ' s]));
+        % warning off MATLAB:load:variableNotFound
+        % data_tmp = in_bst_data(file_nirs_raw, 'Events');
+        % warning on MATLAB:load:variableNotFound
+        % to_rename = {};
+        % renamed = {};
+        % for ievt=1:length(data_tmp.Events)
+        %     if ~startsWith(data_tmp.Events(ievt).label, 'CMT')
+        %         to_rename{end+1} = data_tmp.Events(ievt).label;
+        %         renamed{end+1} = ['CMT ' data_tmp.Events(ievt).label];
+        %     end
+        % end
+        % if ~isempty(to_rename)
+        %     bst_process('CallProcess', 'process_evt_rename', file_nirs_raw, [], ...
+        %         'src',   strjoin(to_rename, ', '), 'dest',  strjoin(renamed, ','));
+        % end
+        merge_duplicate_events(file_nirs_raw);
+        % TODO apply proper channel coordinates?
     else
-        redone_imports = [redone_imports 1];
+        file_nirs_raw = file_nirs_raw{1};
     end
 
-    [file_in, redone] = nst_run_bst_proc([subject_name '/' condition '/Raw'], options.import.redo, ...
-                                   'process_import_data_time', [], [], ...
-                                   'subjectname',  subject_name, ...
-                                   'condition',    condition, ...
-                                   'datafile',     {nirs_fn, 'NIRS-BRS'}, ...
-                                   'timewindow',   [], ...
-                                   'split',        0, ...
-                                   'ignoreshort',  1, ...
-                                   'channelalign', 1, ...
-                                   'usectfcomp',   0, ...
-                                   'usessp',       0, ...
-                                   'freq',         [], ...
-                                   'baseline',     []);
-
-    if endsWith(labchart_fn, 'bst')
-
-        sFiles = bst_process('CallProcess', 'process_import_data_time', [], [], ...
-                             'subjectname',  subject_name, ...
-                             'condition',    condition, ...
-                             'datafile',     {labchart_fn, 'BST-BIN'}, ...
-                             'timewindow',   [], ...
-                             'split',        0, ...
-                             'ignoreshort',  1, ...
-                             'channelalign', 1, ...
-                             'usectfcomp',   0, ...
-                             'usessp',       0, ...
-                             'freq',         [], ...
-                             'baseline',     []);
+    condition_aux = [visit '_origin_aux' ppl_tag];
+    file_aux_raw = nst_get_bst_func_files(subject_name, condition_aux, 'Raw');
+    if isempty(file_aux_raw)
+        [file_aux_raw, redone] = nst_run_bst_proc([subject_name '/' condition_aux '/Raw'], options.import.redo, ...
+                                                'process_import_data_time', [], [], ...
+                                                'subjectname',  subject_name, ...
+                                                'condition',    condition_aux, ...
+                                                'datafile',     {aux_fn, 'BST-BIN'}, ...
+                                                'timewindow',   [], ...
+                                                'split',        0, ...
+                                                'ignoreshort',  1, ...
+                                                'channelalign', 1, ...
+                                                'usectfcomp',   0, ...
+                                                'usessp',       0, ...
+                                                'freq',         [], ...
+                                                'baseline',     []);
     else
-        error('Unsupported file format');
+        file_aux_raw = file_aux_raw{1};
     end
-    warning off MATLAB:load:variableNotFound
-    data_tmp = in_bst_data(sFiles.FileName, 'Events');
-    warning on MATLAB:load:variableNotFound
-    if isempty(data_tmp.Events) || ~any(ismember({options.gaps.event_label}, {data_tmp.Events.label}))
-        tag_events = db_template('event');
-        ievt = 1;
-        for igap=1:length(options.gaps)
-            tag_events(ievt).label = options.gaps(igap).event_label;
-            tag_events(ievt).times = zeros(2,0);
-            ievt = ievt + 1;
-        end
-        for icondition=1:length(options.conditions)
-            tag_events(ievt).label = options.conditions{icondition};
-            tag_events(ievt).times = zeros(2,0);
-            ievt = ievt + 1;
-        end
-        % sFile_in = bst_process('GetInputStruct', sFiles);
-        process_nst_import_csv_events('import_events', [], sFiles, tag_events);
-    end
+    merge_duplicate_events(file_aux_raw);
 
-    discard_start = [];
-    if isfield(acqs_info, 'crop_start_time')
-        discard_start = acqs_info(iacq).crop_start_time;
-    end
-
-    if ~isempty(discard_start) && ~isnan(discard_start)
-        DataMatOrig = in_bst_data(sFiles.FileName);
-        fprintf('Crop %s from %d sec\n',  subject_name, discard_start);
-        time_window = [discard_start DataMatOrig.Time(end)];
-        sFiles = bst_process('CallProcess', 'process_extract_time', sFiles, [], ...
-                            'timewindow', time_window, ...
-                            'overwrite',  1);
-        % DataMat = in_bst_data(sFiles.FileName);
-        % DataMat.AllUnits = DataMatOrig.AllUnits;
-        % DataMat.Timestamp = DataMatOrig.Timestamp;
-        % bst_save(file_fullpath(sFiles.FileName), DataMat, 'v7');
-    end
-    sFiles = bst_process('CallProcess', 'process_set_comments', sFiles, [], ...
-                         'tag', 'Raw', 'isindex', 0);
-    files_in = [files_in sFiles.FileName];
+    add_default_nirs_events(file_nirs_raw, options)
+    add_default_aux_events(file_aux_raw, options);
 end
 
+detect_heart_beats(acqs_info, options);
+end
+
+function merge_duplicate_events(file_raw)
+% Merge events with duplicate group names
+warning off MATLAB:load:variableNotFound
+data_tmp = in_bst_data(file_raw, 'Events');
+warning on MATLAB:load:variableNotFound
+if (~isfield(data_tmp, 'Events') || ...
+    isempty(data_tmp.Events) || ...
+    length(unique({data_tmp.Events.label})) == length(data_tmp.Events))
+    return;
+end
+merged_evt = dictionary();
+for ievt=1:length(data_tmp.Events)
+    evt = data_tmp.Events(ievt).label;
+    if ~isConfigured(merged_evt) || ~isKey(merged_evt, evt)
+        merged_evt(evt) = {data_tmp.Events(ievt).times};
+    else
+        previous_events = merged_evt(evt);
+        merged_evt(evt) = {[previous_events{1} data_tmp.Events(ievt).times]};
+    end
+end
+
+new_events = db_template('event');
+evts = keys(merged_evt);
+for ievt=1:length(evts)
+    evt = evts{ievt};
+    evt_times = merged_evt(evt);
+    new_events(ievt).label = evt;
+    new_events(ievt).times = evt_times{1};
+    new_events(ievt).epochs = ones(1, size(evt_times{1}, 2));
+end
+
+bst_process('CallProcess', 'process_evt_delete', file_raw, [], ...
+            'eventname', strjoin({data_tmp.Events.label}, ','));
+process_nst_import_csv_events('import_events', [],...
+                               bst_process('GetInputStruct', file_raw), new_events);
+
+end
+
+function rename_matching_event(data_file, match_func, rename_func)
+data_tmp = in_bst_data(data_file, 'Events');
+to_rename = {};
+renamed = {};
+for ievt=1:length(data_tmp.Events)
+    if match_func(data_tmp.Events(ievt).label)
+        to_rename{end+1} = data_tmp.Events(ievt).label;
+        renamed{end+1} = rename_func(data_tmp.Events(ievt).label);
+    end
+end
+if ~isempty(to_rename)
+    bst_process('CallProcess', 'process_evt_rename', data_file, [], ...
+                'src',   strjoin(to_rename, ', '), 'dest',  strjoin(renamed, ','));
+end
+
+end
+
+function detect_heart_beats(acqs_info, options)
+ppl_tag = get_ppl_tag();
+for iacq=1:length(acqs_info)
+    %% Import data
+    subject_name = acqs_info(iacq).subject_name;
+    visit = acqs_info(iacq).visit_label;
+    
+    condition_nirs = [visit '_origin_nirs' ppl_tag];
+    file_nirs_raw = nst_get_bst_func_files(subject_name, condition_nirs, 'Raw');
+    
+    if ~isempty(file_nirs_raw)
+        file_nirs_raw = file_nirs_raw{1};
+        data_nirs_tmp = in_bst_data(file_nirs_raw, 'Events', 'Time');
+        nirs_events = data_nirs_tmp.Events;
+        if (isfield(acqs_info(iacq), 'cardiac_channel_ref') && ...
+            ~(isempty(acqs_info(iacq).cardiac_channel_ref)))
+            detect_heart_beats_nirs(file_nirs_raw, acqs_info(iacq).cardiac_channel_ref);
+        elseif ~ismember(options.sync_event.nirs, {nirs_events.label})
+            error('No sync event in NIRS and cardiac reference channel not defined for %s - %s.', ...
+                  subject_name, visit);
+        end
+    else
+        error('Could not find Raw nirs data for %s - %s', subject_name, visit);
+    end
+
+    condition_aux = [visit '_origin_aux' ppl_tag];
+
+    file_aux_raw = nst_get_bst_func_files(subject_name, condition_aux, 'Raw');
+    if ~isempty(file_aux_raw)
+        file_aux_raw = file_aux_raw{1};
+        detect_heart_beats_ecg(file_aux_raw, options);
+    else
+        error('Could not find Raw aux data for %s - %s', subject_name, visit);
+    end
+end
+
+end
+
+function detect_heart_beats_ecg(sFile, options)
+sEvents = in_bst_data(sFile, 'Events');
+if ~ismember(options.heart_beats.event_name, {sEvents.Events.label})
+    bst_process('CallProcess', 'process_evt_detect_multi_ecg', sFile, [], ...
+                'channelnames', strjoin(options.heart_beats.ecg_channel_labels, ', '), ...
+                'timewindow',   [], ...
+                'dt',           0.05, ...
+                'eventname_good_ecg',  options.heart_beats.good_ecg_event_name, ...
+                'eventname',    options.heart_beats.event_name);
+end
+end
+
+function detect_heart_beats_nirs(file_nirs, cardiac_channel_ref)
+    data_tmp = in_bst_data(file_nirs , 'Events');
+    if ~ismember('cardiac', {data_tmp.Events.label})
+        % Process: Detect: cardiac
+        bst_process('CallProcess', 'process_evt_nirs_cardiac', file_nirs, [], ...
+                   'eventname',    'cardiac', ...
+                    'channelname',  cardiac_channel_ref, ...
+                   'timewindow',   [0, 875.04], ...
+                   'bandpass',     [1, 7], ...
+                   'threshold',    3, ...
+                   'blanking',     0.12, ...
+                   'isnoisecheck', 1);
+    end
 end
