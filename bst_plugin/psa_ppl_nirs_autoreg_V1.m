@@ -123,84 +123,61 @@ switch action
         varargout{1} = imported_files;
         varargout{2} = redone;
         return;
-    case 'sync_markings'
-        if nargin >= 3
-            subject_names = arg1;
-        else
-            % Get all subjects in current protocol (ignore Group_analysis
-            % and subject holding full head model)
-            if isempty(GlobalData.DataBase.iProtocol) || (GlobalData.DataBase.iProtocol == 0)
-                error('Cannot find current protocol');
+    case 'save_markings'
+        acqs_info = arg1;
+        ppl_tag = get_ppl_tag();
+        files_to_sync = {};
+        for iacq=1:length(acqs_info)
+            subject_name = acqs_info(iacq).subject_name;
+            visit = acqs_info(iacq).visit_label;
+            condition_nirs = [visit '_origin_nirs' ppl_tag];
+            file_nirs_raw = nst_get_bst_func_files(subject_name, condition_nirs, 'Raw');
+            if isempty(file_nirs_raw)
+                warning('Missing NIRS Raw data files for %s - %s\n', ...
+                        subject_name, visit);
+            else
+                files_to_sync{end+1} = file_nirs_raw{1};
             end
-            sSubjects = GlobalData.DataBase.ProtocolSubjects(GlobalData.DataBase.iProtocol);
-            subject_names = ignore_forged_subjects({sSubjects.Subject.Name});
+            condition_aux = [visit '_origin_aux' ppl_tag];
+            file_aux_raw = nst_get_bst_func_files(subject_name, condition_aux, 'Raw');
+            if isempty(file_aux_raw)
+                warning('Missing AUX Raw data files for %s - %s\n', ...
+                        subject_name, visit);
+            else
+                files_to_sync{end+1} = file_aux_raw{1};
+            end
         end
-
-        if nargin >= 4
-            sync_mode = arg2;
-        else
-            sync_mode = 'sync';
-        end
-
-        % TODO adapt for NIRS and Labchart
-
-        %origin saving
-        orig_cond = ['origin_labchart' get_ppl_tag()];
-        files_raw = cellfun(@(s)  nst_get_bst_func_files(s, orig_cond , 'Raw'), ...
-                           subject_names, 'UniformOutput', false);
-
-        missing_raw = cellfun(@isempty, files_raw);
-        if any(missing_raw)
-            warning(sprintf('Missing Raw data files for subjects (will be ignored):\n%s\n', ...
-                            strjoin(cellfun(@(s) sprintf(' - %s', s), subject_names(missing_raw), ...
-                                    'UniformOutput', false), '\n')));
-        end
-        files_raw = files_raw(~missing_raw);
-
-        orig_cond_nirs = ['origin_nirs' get_ppl_tag()];
-        files_raw2 = cellfun(@(s)  nst_get_bst_func_files(s, orig_cond_nirs , 'Raw'), ...
-                           subject_names, 'UniformOutput', false);
-
-        missing_raw = cellfun(@isempty, files_raw2);
-        if any(missing_raw)
-            warning(sprintf('Missing Raw data files for subjects (will be ignored):\n%s\n', ...
-                            strjoin(cellfun(@(s) sprintf(' - %s', s), subject_names(missing_raw), ...
-                                    'UniformOutput', false), '\n')));
-        end
-        files_raw2 = files_raw2(~missing_raw);
-
-
-        
-        %preproc saving duplicate it for the two preproc folders
-        preproc_cond = ['preproc_labchart' get_ppl_tag()];
-        files_chan_fix = cellfun(@(s)  nst_get_bst_func_files(s, preproc_cond , 'Events_delete_duplicated_item'), ...
-                           subject_names, 'UniformOutput', false);
-        missing_chan_fix = cellfun(@isempty, files_chan_fix);
-        if any(missing_chan_fix)
-            warning(sprintf('Missing Raw_Chan_Fix data files for subjects (will be ignored):\n%s\n', ...
-                             strjoin(cellfun(@(s) sprintf(' - %s', s), subject_names(missing_chan_fix), ...
-                                    'UniformOutput', false), '\n')));
-        end
-        files_chan_fix = files_chan_fix(~missing_chan_fix);
-
-
-
-        %preproc saving duplicate it for the two preproc folders
-        preproc_cond_nirs = ['preproc_nirs' get_ppl_tag()];
-        files_chan_fix2 = cellfun(@(s)  nst_get_bst_func_files(s, preproc_cond_nirs , 'Events_uploaded'), ...
-                           subject_names, 'UniformOutput', false);
-        missing_chan_fix = cellfun(@isempty, files_chan_fix2);
-        if any(missing_chan_fix)
-            warning(sprintf('Missing Raw_Chan_Fix data files for subjects (will be ignored):\n%s\n', ...
-                             strjoin(cellfun(@(s) sprintf(' - %s', s), subject_names(missing_chan_fix), ...
-                                    'UniformOutput', false), '\n')));
-        end
-        files_chan_fix2 = files_chan_fix2(~missing_chan_fix);
-
-        files_to_sync = [files_raw files_raw2 files_chan_fix files_chan_fix2];
-        
         create_dirs(options);
-        sync_markings(files_to_sync, options, sync_mode);
+        sync_markings(files_to_sync, options, 'export_all');
+        varargout{1} = files_to_sync;
+        return;
+
+     case 'load_markings'
+        acqs_info = arg1;
+        ppl_tag = get_ppl_tag();
+        files_to_sync = {};
+        for iacq=1:length(acqs_info)
+            subject_name = acqs_info(iacq).subject_name;
+            visit = acqs_info(iacq).visit_label;
+            condition_nirs = [visit '_origin_nirs' ppl_tag];
+            file_nirs_raw = nst_get_bst_func_files(subject_name, condition_nirs, 'Raw');
+            if isempty(file_nirs_raw)
+                error('Missing NIRS Raw data files for %s - %s\n', ...
+                        subject_name, visit);
+            else
+                files_to_sync{end+1} = file_nirs_raw{1};
+            end
+            condition_aux = [visit '_origin_aux' ppl_tag];
+            file_aux_raw = nst_get_bst_func_files(subject_name, condition_aux, 'Raw');
+            if isempty(file_aux_raw)
+                error('Missing AUX Raw data files for %s - %s\n', ...
+                        subject_name, visit);
+            else
+                files_to_sync{end+1} = file_aux_raw{1};
+            end
+        end
+        create_dirs(options);
+        sync_markings(files_to_sync, options, 'load_all');
         varargout{1} = files_to_sync;
         return;
     case 'detect_heart_beats'
@@ -251,6 +228,8 @@ for iacq=1:length(acq_defs)
     file_aux_raw = nst_get_bst_func_files(subject_name, orig_cond_aux , 'Raw');
     file_aux_raw = file_aux_raw{1};
 
+    % TODO QC mark cardiac events that are too close or too spread apart
+
     % Remove duplicate sync triggers
     nirs_time = in_bst(file_nirs_raw, 'Time');
     bst_process('CallProcess', 'process_evt_multiresp', ...
@@ -275,7 +254,7 @@ for iacq=1:length(acq_defs)
     % Insure that conditions have been tagged
     if ~isempty(options.conditions)
         if isempty([aux_events(ismember({aux_events.label}, options.conditions)).times])
-            error('Condition (%s) not tagged in %s/%s/Raw', strjoin(options.conditions, ', '), ...
+            warning('Condition (%s) not tagged in %s/%s/Raw', strjoin(options.conditions, ', '), ...
                 subject_name, orig_cond_aux);
         elseif ~isempty([nirs_events(ismember({nirs_events.label}, options.conditions)).times])
             error('Condition should not be tagged in both nirs and aux');
@@ -290,22 +269,57 @@ for iacq=1:length(acq_defs)
                                          'process_psa_synchronise',  file_nirs_raw, file_aux_raw, ...
                                          'src',  options.sync_event.nirs, ...
                                          'dest', options.sync_event.aux, ...
-                                         'transfer_events', strjoin([options.sync_event.aux options.conditions options.heart_beats.event_name], ','));
+                                         'transfer_events', strjoin([options.sync_event.aux options.conditions options.heart_beats.event_name 'discard_BP' 'discard_cardiac' 'extrasystole'], ','));
+        nirs_mat_tmp = in_bst_data(file_nirs_sync, 'Time');
+        aux_mat_tmp = in_bst_data(file_aux_raw, 'Time');
+        if 0
+            fprintf('Time bounds of nirs after sync: %1.2f - %1.2f\n', ...
+                    nirs_mat_tmp.Time(1), nirs_mat_tmp.Time(end));
+            fprintf('Time bounds of aux: %1.2f - %1.2f\n', ...
+                    aux_mat_tmp.Time(1), aux_mat_tmp.Time(end));
+        end
+        common_tstart = max(nirs_mat_tmp.Time(1), aux_mat_tmp.Time(1));
+        common_tend = min(nirs_mat_tmp.Time(end), aux_mat_tmp.Time(end));
+        % fprintf('Common time bounds: %1.2f - %1.2f\n', common_tstart, common_tend);
+        file_nirs_aligned = nst_run_bst_proc(fmt_item(visit, 'procs', 'nirs', 'Raw_aligned_aux'), 0, ...
+                                             'process_import_data_time', file_nirs_sync, [], ...
+                                             'subjectname',  subject_name, ...
+                                             'condition',     '', ...
+                                             'timewindow',    [common_tstart, common_tend], ...
+                                             'split',         0, ...
+                                             'ignoreshort',   0, ...
+                                             'usectfcomp',    0, ...
+                                             'usessp',        0, ...
+                                             'freq',          [], ...
+                                             'baseline',      [], ...
+                                             'blsensortypes', 'MEG, EEG');
+         file_aux_aligned = nst_run_bst_proc(fmt_item(visit, 'procs', 'aux', 'Raw_aligned_nirs'), 0, ...
+                                             'process_import_data_time', file_aux_raw, [], ...
+                                             'subjectname',  subject_name, ...
+                                             'condition',     '', ...
+                                             'timewindow',    [common_tstart, common_tend], ...
+                                             'split',         0, ...
+                                             'ignoreshort',   0, ...
+                                             'usectfcomp',    0, ...
+                                             'usessp',        0, ...
+                                             'freq',          [], ...
+                                             'baseline',      [], ...
+                                             'blsensortypes', 'MEG, EEG');
         sync_ok = true;
     else
         warning('No sync event available. Autoregulation will not be computed.');
         sync_ok = false;
-        file_nirs_sync = file_nirs_raw;
+        file_nirs_aligned = file_nirs_raw;
     end
-    data_nirs_tmp = in_bst_data(file_nirs_sync, 'Events', 'Time');
+    data_nirs_tmp = in_bst_data(file_nirs_aligned, 'Events', 'Time');
     nirs_events = data_nirs_tmp.Events;
 
     % NIRS: Crop trailing segments tagged with event "discard"
     idiscard_evt = strcmp('discard', {nirs_events.label});
-    file_nirs_discard = file_nirs_sync;
+    file_nirs_discard = file_nirs_aligned;
     if any(idiscard_evt) && ~isempty(nirs_events(idiscard_evt).times)
         discard_evt = nirs_events(idiscard_evt);
-        data_time = in_bst_data(file_nirs_sync, 'Time');
+        data_time = in_bst_data(file_nirs_aligned, 'Time');
         time_window = [0 data_time.Time(end)];
         if discard_evt.times(1,1)==data_time.Time(1)
             time_window(1) = discard_evt.times(2,1);
@@ -317,7 +331,7 @@ for iacq=1:length(acq_defs)
         end
         if time_window(1) ~= 0 || time_window(2) ~= data_time.Time(end)
             file_nirs_discard = nst_run_bst_proc(fmt_item(visit, 'procs', 'nirs', 'Discard'), 0, ...
-                                                  'process_extract_time', file_nirs_raw_proc, [], ...
+                                                  'process_extract_time', file_nirs_aligned, [], ...
                                                   'timewindow', time_window, ...
                                                   'overwrite',  0);
             bst_process('CallProcess', 'process_evt_delete', file_nirs_discard, [], ...
@@ -340,7 +354,8 @@ for iacq=1:length(acq_defs)
     file_nirs_moco = nst_run_bst_proc(fmt_item(visit, 'procs', 'nirs', 'Moco'), 0, ...
                                      'process_nst_motion_correction', file_nirs_deglitched, [], ...
                                      'option_event_name', 'movement_artefacts');
-    [sFiles_nirs_conds, conds] = split_by_condition(file_nirs_moco, options.conditions, 'Moco');
+    % fprintf('Split NIRS by condition\n');
+    [sFiles_nirs_conds, conds] = split_by_condition(file_nirs_moco, options.conditions, 'Moco', options);
 
     if sync_ok
         % BP gap filling
@@ -354,24 +369,46 @@ for iacq=1:length(acq_defs)
         end
         fgap_item = fmt_item(visit, 'procs', 'aux', 'BP_gap_filled');
         [file_aux_fgaps, ~] = nst_run_bst_proc(fgap_item, 0, ...
-                                            'process_psa_fill_gaps', file_aux_raw, [], ...
+                                            'process_psa_fill_gaps', file_aux_aligned, [], ...
                                             'option_event_name',  'BP_gap', ...
                                             'option_channels',    BP_channel_label, ...
                                             'option_ar_win_size', options.fill_gaps.ar_win_size_sec, ...
                                             'option_ar_order',    options.fill_gaps.ar_order_sec);            
-
-        [sFiles_aux_conds, aux_conds] = split_by_condition(file_aux_fgaps, options.conditions, 'BP_gap_filled');
+        % fprintf('Split AUX by condition\n');
+        [sFiles_aux_conds, aux_conds] = split_by_condition(file_aux_fgaps, options.conditions, 'BP_gap_filled', options);
     
-
         if length(conds) ~= length(aux_conds)
             error('Inconsitent conditions between nirs (%s) and aux (%s)', ...
                   none_str(strjoin(conds, ', ')), none_str(strjoin(aux_conds, ', ')));
         end
+        % Check consitency of cardiac events in NIRS and AUX
+        for icond=1:length(sFiles_nirs_conds)
+            data_nirs_tmp = in_bst_data(sFiles_nirs_conds{icond}, 'Events', 'Time');
+            nirs_events = data_nirs_tmp.Events;
+            
+            data_aux_tmp = in_bst_data(sFiles_aux_conds{icond}, 'Events', 'Time');
+            aux_events = data_aux_tmp.Events;
+    
+            dt_nirs = diff(data_nirs_tmp.Time(1:2));
+            if any(abs(data_nirs_tmp.Time([1 end]) - data_aux_tmp.Time([1 end])) > dt_nirs) 
+                warning('Different %s time bounds btwn NIRS (%1.2f-%1.2f) and AUX (%1.2f-%1.2f)', ...
+                        conds{icond}, data_nirs_tmp.Time(1), data_nirs_tmp.Time(end), ...
+                        data_aux_tmp.Time(1), data_aux_tmp.Time(end));
+            end
+            icardiac_nirs = find(strcmp({nirs_events.label}, options.heart_beats.event_name));
+            icardiac_aux = find(strcmp({aux_events.label}, options.heart_beats.event_name));
+            nirs_cardiac = nirs_events(icardiac_nirs).times();
+            aux_cardiac = aux_events(icardiac_aux).times();
+            if any(abs(nirs_cardiac([1 end]) - aux_cardiac([1 end])) > dt_nirs)
+                 warning('Different %s cardiac event bounds btwn NIRS (%1.2f-%1.2f) and AUX (%1.2f-%1.2f)', ...
+                         conds{icond}, nirs_cardiac(1), nirs_cardiac(end), ...
+                          aux_cardiac(1), aux_cardiac(end));
+            end
+        end
+
     end
 
     % Pulsatility NIRS
-    % ASSUME: cardiac events have been finalised, either using aux ECG or
-    %         directly from NIRS
     for icond=1:length(sFiles_nirs_conds)
         condition = conds{icond};
         sFile_nirs = sFiles_nirs_conds{icond};
@@ -390,6 +427,15 @@ for iacq=1:length(acq_defs)
         condition = conds{icond};
         sFile_nirs = sFiles_nirs_conds{icond};
         sFile_aux = sFiles_aux_conds{icond};
+        
+        data_aux_tmp = in_bst_data(sFile_aux, 'Events', 'Time');
+        aux_events = data_aux_tmp.Events;
+        idiscard_evt = find(strcmp('discard_BP', {aux_events.label}));
+        if ~isempty(idiscard_evt) && sum(diff(aux_events(idiscard_evt).times)) / diff(data_aux_tmp.Time([1 end])) > 0.5
+            warning('Ignore AUX BP %s signal because more than 50% is discarded', ...
+                    condition);
+            continue;
+        end
         % TODO expose option for pct filter
         mx_item = fmt_item(visit, 'procs', 'nirs', [condition '_Mx']);
         [sFile_mx, redone] = nst_run_bst_proc(mx_item, 0, ...
@@ -525,16 +571,17 @@ sFile_features_avg = {};
 for ifeature=1:length(feature_labels)
     feature = feature_labels{ifeature};
     [sFile_feat, ~] = nst_run_bst_proc([item_prefix feature], 0, ...
-                                            'process_psa_pulsatility', sFile_normed, [], ...
-                                            'timewindow',    [], ...
-                                            'channelnames',  'NIRS', ...
-                                            'heart_beat_event', cardiac_event_label, ...
-                                            'flip_sign', 1, ...
-                                            'function', feature);
+                                        'process_psa_pulsatility', sFile_normed, [], ...
+                                        'timewindow',    [], ...
+                                        'channelnames',  'NIRS', ...
+                                        'heart_beat_event', cardiac_event_label, ...
+                                        'use_discard_channel_events',   1, ...
+                                        'discard_global_events', 'discard_cardiac, discard, extrasystole', ...
+                                        'flip_sign', 1, ...
+                                        'function', feature);
     [sFile_feat_avg, redone] = nst_run_bst_proc([item_prefix feature '_avg'], 0, ...
                                                 'process_psa_average_time_robust', sFile_feat, [], ...
                                                 'pct_filter_range', [25, 75], ...
-                                                'use_discard_events',   0, ...
                                                 'avg_func',  'mean', ...  % Arithmetic average:  mean(x)
                                                 'overwrite',        0);
     sFile_features_avg{ifeature} = sFile_feat_avg;
@@ -584,7 +631,7 @@ high = round((1-pct_filter) * nb_channels);
 feature_mean = mean(sorted_data(low:high));
 end
 
-function [output_files, output_conditions] = split_by_condition(data_file, conditions, tag)
+function [output_files, output_conditions] = split_by_condition(data_file, conditions, tag, options)
 data_mat = in_bst_data(data_file, 'Events');
 events = data_mat.Events;
 [subject_name, proc_folder] = parse_bst_file(data_file);
@@ -596,6 +643,23 @@ if ~isempty(conditions)
         idx_event_cond = find(strcmp(condition, {events.label}));
         if isempty(idx_event_cond) || isempty(events(idx_event_cond).times)
             continue
+        end
+        if 0
+            fprintf('Split by %s: t=[%1.2f-%1.2f], dur=%1.2f\n', condition, ...
+                    events(idx_event_cond).times(1), ...
+                    events(idx_event_cond).times(2), ...
+                    events(idx_event_cond).times(2)-events(idx_event_cond).times(1));
+        end
+        idx_event_cardiac = find(strcmp({events.label}, ...
+                                 options.heart_beats.event_name));
+        if ~isempty(idx_event_cardiac)
+            cardiac_times = events(idx_event_cardiac).times;
+            nb_cardiac = sum((cardiac_times >= events(idx_event_cond).times(1)) & ...
+                             (cardiac_times <= events(idx_event_cond).times(2)));
+            if 0
+                fprintf('Nb of cardiac events in %s before split: %d\n', condition, ...
+                        nb_cardiac);
+            end
         end
         raw_cond_item = [subject_name '/' proc_folder '/' condition '_' tag];
         [sFile_cond, ~] = nst_run_bst_proc(raw_cond_item, 0, ...
@@ -613,10 +677,26 @@ if ~isempty(conditions)
                                                 'freq',          [], ...
                                                 'baseline',      [], ...
                                                 'blsensortypes', 'MEG, EEG');
+
+
         if isempty(sFile_cond)
             continue
         end
-        
+       
+        data_mat_tmp = in_bst_data(sFile_cond, 'Events', 'Time');
+        events_after = data_mat_tmp.Events;
+        if 0
+        fprintf('Time bound of extracted %s signal: t=[%1.2f-%1.2f], dur=%1.2f\n',...
+                condition, data_mat_tmp.Time(1), data_mat_tmp.Time(end), ...
+                data_mat_tmp.Time(end) - data_mat_tmp.Time(1));
+        end
+        idx_event_cardiac = find(strcmp({events_after.label}, ...
+                                 options.heart_beats.event_name));
+        if 0 && ~isempty(idx_event_cardiac)
+            fprintf('Nb of cardiac events in %s after split: %d\n', condition, ...
+                    length(events_after(idx_event_cardiac).times));
+        end
+
         output_files{end+1} = sFile_cond;
         output_conditions{end+1} = condition;
     end
@@ -705,7 +785,7 @@ else
     data_event_labels = {};
 end
 tag_events = db_template('event');
-
+ 
 ievt = 1;
 if ~ismember('movement_artefacts', data_event_labels)
     tag_events(ievt).label = 'movement_artefacts';
@@ -738,16 +818,25 @@ end
 tag_events = db_template('event');
 
 ievt = 1;
-if ~ismember('discard_aux', data_event_labels)
-    tag_events(1).label = 'discard_aux';
-    tag_events(1).times = zeros(2,0);
-    ievt = ievt + 1;
-end
+% Segments where BP is artefactual and can be reconstructed < 2 sec.
 if ~ismember('BP_gap', data_event_labels)
     tag_events(ievt).label = 'BP_gap';
     tag_events(ievt).times = zeros(2,0);
     ievt = ievt + 1;
 end
+% Segments where BP is artefactual and are too long (> 2 sec) to be reconstructed
+if ~ismember('discard_BP', data_event_labels)
+    tag_events(1).label = 'discard_BP';
+    tag_events(1).times = zeros(2,0);
+    ievt = ievt + 1;
+end
+% Segments where heart beats cannot be tagged
+if ~ismember('discard_cardiac', data_event_labels)
+    tag_events(1).label = 'discard_cardiac';
+    tag_events(1).times = zeros(2,0);
+    ievt = ievt + 1;
+end
+
 if ~ismember('extrasystole', data_event_labels)
     tag_events(ievt).label = 'extrasystole';
     tag_events(ievt).times = zeros(2,0);
@@ -909,7 +998,7 @@ end
 
 function sync_markings(sFiles, options, sync_mode)
 
-io_options.events_to_sync = [options.conditions {options.gaps.event_label, options.heart_beats.event_name}];
+io_options.events_to_sync = [options.conditions {'cardiac', 'movement_artefacts', 'discard' , 'BP_gap', 'discard_BP', 'discard_cardiac', 'extrasystole'}];
 
 if strcmp(sync_mode, 'load_all') 
     bst_process('CallProcess', 'process_evt_delete', sFiles, [], ...
@@ -922,7 +1011,18 @@ sync_markings_logic(sFiles, @import_events_wrap, @export_events_wrap, ...
 sync_markings_logic(sFiles, @import_channels_wrap, @export_channels_wrap, ...
                     io_options, '_channel_flags', options.export_dir_events, ...
                     options.dry_markings_sync, sync_mode);
-
+if strcmp(sync_mode, 'load_all') 
+    sInputs = bst_process('GetInputStruct', sFiles);
+    for ifile=1:length(sFiles)
+        if ~isempty(strfind(sInputs(ifile).FileName, 'nirs'))
+            add_default_nirs_events(sInputs(ifile), options);
+        elseif ~isempty(strfind(sInputs(ifile).FileName, 'aux'))
+            add_default_aux_events(sInputs(ifile), options);
+        else
+            error('Cannot recognise signal type %s', sInputs(ifile).FileName);
+        end
+    end
+end
 end
 
 function export_events_wrap(file_fn, marking_fn, io_options)
@@ -947,42 +1047,26 @@ end
 
 function sync_markings_logic(sFiles, import_marking_func, export_marking_func, io_options, marking_fn_suffix, marking_dir, dry, mode)
 
-assert(ismember(mode, {'sync', 'export_all', 'load_all'}));
+assert(ismember(mode, {'export_all', 'load_all'}));
 
 for iFile=1:length(sFiles)
     file_fn = file_fullpath(sFiles{iFile});
-    file_obj = dir(file_fn);
-    local_modification_date = file_obj.date;
-
     [subject_name, condition_label, item_label] = bst_file_info(file_fn);
     marking_fn = fullfile(marking_dir, protect_fn_str([subject_name '--' condition_label '--' item_label ...
                                                        '_' marking_fn_suffix '.mat']));
-    if ~exist(marking_fn, 'file')
-        export_modification_date = 0;
-    else
-        sMDate = load(marking_fn, 'modification_date');
-        if isempty(fieldnames(sMDate))
-            export_modification_date = 0;
-        else
-            export_modification_date = sMDate.modification_date;
-        end
-    end
-    if strcmp(mode, 'export_all') || (strcmp(mode, 'sync') && local_modification_date > export_modification_date)
+    if strcmp(mode, 'export_all') 
         fprintf('Export markings from %s to %s\n', ...
                 file_fn, marking_fn);
         if ~dry
             export_marking_func(file_fn, marking_fn, io_options);
-            save(marking_fn, 'local_modification_date', '-append');
         end
-    elseif strcmp(mode, 'load_all') || (strcmp(mode, 'sync') && local_modification_date < export_modification_date)
-        fprintf('Import markings from %s to %s\n', ...
-                marking_fn, file_fn);
+    elseif strcmp(mode, 'load_all') 
+        fprintf('Import markings from %s to %s\n', marking_fn, file_fn);
         if ~dry
             import_marking_func(file_fn, marking_fn, io_options);
         end
     else
-        fprintf('No markings sync: Local and export markings have the same date (%s - %s)\n', ...
-                marking_fn, file_fn);
+        error('Bad mode %s\n', mode);
     end
 end
 
@@ -1009,7 +1093,7 @@ end
 function export_markings(sFiles, tags, options)
 fprintf('Save marking events to origin...\n');
 io_markings(sFiles, '_events', ...
-            options.export_dir_events, 0, '',  @nst_bst_export_events, [options.conditions {options.gaps.event_label}]);
+            options.export_dir_events, 0, '',  @nst_bst_export_events, [options.conditions {options.gaps.event_label, options.discard_segments.event_label}]);
 fprintf('Save channel flags to origin...\n');
 io_markings(sFiles, @nst_bst_export_channel_flags, @get_channel_flags_fn, ...
                'export_dir_channel_flags', 0, '', options);
@@ -1062,7 +1146,6 @@ if ~isempty(export_dir)
     marking_fn = fullfile(export_dir, bfn);
 end
 end
-
 %% Helper functions
 
 function write_log(msg)
