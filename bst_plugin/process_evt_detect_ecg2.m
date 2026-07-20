@@ -69,16 +69,15 @@ function Comment = FormatComment(sProcess) %#ok<DEFNU>
     Comment = sProcess.Comment;
 end
 
-
 %% ===== RUN =====
 function OutputFiles = Run(sProcess, sInputs) %#ok<DEFNU>   
     % Pre-defined set of properties
     %sProcess.options.eventname.Value = 'cardiac';
     sProcess.options.threshold.Value = {3, 'x std', 2};
     sProcess.options.bandpass.Value  = {[10 40], 'Hz', 2};
-    sProcess.options.blanking.Value  = {0.5, 'ms', []};
+    sProcess.options.blanking.Value  = {0.3, 'ms', []};
     sProcess.options.isnoisecheck.Value = 1;
-    sProcess.options.isclassify.Value   = 0;
+    sProcess.options.isclassify.Value   = 1;
     % Call the generic version of the event detection
     OutputFiles = detect_event(sProcess, sInputs);
 end
@@ -328,6 +327,8 @@ function evt = Compute(F, TimeVector, OPTIONS, Fmask)
     
     % ===== FILTER RECORDINGS =====
     % Filter recordings
+    Forig = F;
+    stdForig = std(F);
     if ~isempty(OPTIONS.bandpass)
         [F, FiltSpec] = process_bandpass('Compute', F, sFreq, OPTIONS.bandpass(1), OPTIONS.bandpass(2), 'bst-hfilter-2019', 0);
         smpTransient = round(FiltSpec.transient * sFreq);
@@ -361,6 +362,10 @@ function evt = Compute(F, TimeVector, OPTIONS, Fmask)
         return;
     end
 
+    dt = diff(TimeVector(1:2));
+    abrupt_win = dt * 15;
+    abrupt_win_samples = abrupt_win / dt;
+
     % ===== FIND EVENTS =====
     events = repmat(struct('index',[], 'rms',0), 0);
     i = 1;
@@ -379,8 +384,14 @@ function evt = Compute(F, TimeVector, OPTIONS, Fmask)
         end
         % Event sample
         iMax = iThresh(i) + iMaxWin - 1;
+        artefact_detected = false;
+        for icheck=iMax-abrupt_win_samples:iMax+abrupt_win_samples
+            if Forig(icheck+1)-Forig(icheck-1) > 2 * stdForig
+                artefact_detected = true;
+            end
+        end
         % If the peaks meet the criteria, this is an event
-        if (nPeaks < OPTIONS.maxcross) && (Fabs(iMax) > OPTIONS.ampmin) % was if (nPeaks < OPTIONS.maxcross) && (Fabs(iMax)>OPTIONS.ampmin) && (isempty(Fmask) || (Fmask(iMax) ==1))
+        if (nPeaks < OPTIONS.maxcross) && (Fabs(iMax) > OPTIONS.ampmin)% was if (nPeaks < OPTIONS.maxcross) && (Fabs(iMax)>OPTIONS.ampmin) && (isempty(Fmask) || (Fmask(iMax) ==1))
 
             iEvt = length(events) + 1;
             events(iEvt).rms   = sqrt(mean(Fabs(iWindow).^2));
