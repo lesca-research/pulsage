@@ -261,10 +261,7 @@ for iacq=1:length(acq_defs)
         end
     end
     % Synchronise NIRS onto AUX
-    if ismember(options.sync_event.nirs, {nirs_events.label})
-        if ~ismember(options.sync_event.aux, {aux_events.label})
-            error('%s not found in aux events', options.sync_event.aux);
-        end
+    if ismember(options.sync_event.nirs, {nirs_events.label}) && ismember(options.sync_event.aux, {aux_events.label})
         file_nirs_sync = nst_run_bst_proc(fmt_item(visit, 'procs', 'nirs', 'Raw_sync_aux'), 0, ...
                                          'process_psa_synchronise',  file_nirs_raw, file_aux_raw, ...
                                          'src',  options.sync_event.nirs, ...

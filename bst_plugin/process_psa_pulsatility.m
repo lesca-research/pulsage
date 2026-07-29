@@ -64,11 +64,11 @@ sProcess.options.function.Comment = {'Pulse CBF', ...
                                      'Heart Rate:  <FONT color="#777777">1/duration*60</FONT>'; ...
                                      'pCBF', 'tt_pCBF', 'pulse_amplitude', 'heart_rate'};
 sProcess.options.function.Type    = 'radio_label';
-sProcess.options.function.Value   = 'pulse_amplitude';
+sProcess.options.function.Value   = 'pulse_amplitude_normed';
 
 sProcess.options.use_discard_channel_events.Comment = 'Use discard_<channel> events to discard channel-specific segments';
 sProcess.options.use_discard_channel_events.Type       = 'checkbox';
-sProcess.options.use_discard_channel_events.Value      = 0;
+sProcess.options.use_discard_channel_events.Value      = 1;
 
 sProcess.options.discard_global_events.Comment = 'Discard events (apply to all channels, coma-separated):';
 sProcess.options.discard_global_events.Type    = 'text';
@@ -164,6 +164,8 @@ for iInput=1:length(sInputs)
                     func = @gradient_argmax;
                 case 'pulse_amplitude'
                     func = @pulse_amplitude;
+                case 'pulse_amplitude_normed'
+                    func = @pulse_amplitude_normed;
                 case 'heart_rate'
                     func = @heart_rate;
             end
@@ -243,6 +245,15 @@ end
 
 end
 
+function [pulsatility_value, time] = pulse_amplitude_normed(heart_beat_signal, heart_beat_time)
+    systolic_peak = max(heart_beat_signal);
+    diastolic_peak = min(heart_beat_signal);
+
+    % resistance index: systolic_peak - diastolic_peak ./ systolic_peak
+    pulsatility_value = (systolic_peak - diastolic_peak) ./ mean(heart_beat_signal);
+    time = heart_beat_time(1) + (heart_beat_time(end) - heart_beat_time(1)) / 2;
+end
+
 function [pulsatility_value, time] = pulse_amplitude(heart_beat_signal, heart_beat_time)
     systolic_peak = max(heart_beat_signal);
     diastolic_peak = min(heart_beat_signal);
@@ -301,7 +312,7 @@ if ~isempty(discard_idx_events)
             discard_channels_idx_events = [discard_channels_idx_events evt_idx];
         end
     end
-    if ~isempty(discard_channels_idx_events)
+    if 0 && ~isempty(discard_channels_idx_events)
         assert(abs(masked_duration-nb_masked_samples/sfreq) < 1/sfreq);
         total_discard_duration = sum(diff(events(discard_channels_idx_events).times));
         total_masked_duration = sum(any(~time_mask)) / sfreq;

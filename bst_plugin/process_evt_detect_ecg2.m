@@ -384,12 +384,12 @@ function evt = Compute(F, TimeVector, OPTIONS, Fmask)
         end
         % Event sample
         iMax = iThresh(i) + iMaxWin - 1;
-        artefact_detected = false;
-        for icheck=iMax-abrupt_win_samples:iMax+abrupt_win_samples
-            if Forig(icheck+1)-Forig(icheck-1) > 2 * stdForig
-                artefact_detected = true;
-            end
-        end
+        % artefact_detected = false;
+        % for icheck=iMax-abrupt_win_samples:iMax+abrupt_win_samples
+        %     if Forig(icheck+1)-Forig(icheck-1) > 2 * stdForig
+        %         artefact_detected = true;
+        %     end
+        % end
         % If the peaks meet the criteria, this is an event
         if (nPeaks < OPTIONS.maxcross) && (Fabs(iMax) > OPTIONS.ampmin)% was if (nPeaks < OPTIONS.maxcross) && (Fabs(iMax)>OPTIONS.ampmin) && (isempty(Fmask) || (Fmask(iMax) ==1))
 

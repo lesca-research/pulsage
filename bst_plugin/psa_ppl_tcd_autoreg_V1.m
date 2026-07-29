@@ -131,14 +131,14 @@ switch action
                 error('Missing Raw data file for %s, %s\n', ...
                       acq.acq_tag, condition);
             end
-            files_raw{end+1} = file_raw;
+            files_raw{end+1} = file_raw{1};
 
             file_fix = nst_get_bst_func_files(acq.acq_tag, preproc_cond, 'Raw_Chan_Fix');
             if isempty(file_fix)
                 error('Missing Raw_Chan_Fix data file for %s, %s. Run preprocessing first.\n', ...
                       acq.acq_tag, preproc_cond);
             end 
-            files_fix{end+1} = file_fix;
+            files_fix{end+1} = file_fix{1};
 
         end
         files_to_sync = [files_raw files_fix];
@@ -159,14 +159,14 @@ switch action
                 error('Missing Raw data file for %s, %s\n', ...
                       acq.acq_tag, condition);
             end
-            files_raw{end+1} = file_raw;
+            files_raw{end+1} = file_raw{1};
 
             file_fix = nst_get_bst_func_files(acq.acq_tag, preproc_cond, 'Raw_Chan_Fix');
             if isempty(file_fix)
                 error('Missing Raw_Chan_Fix data file for %s, %s. Run preprocessing first.\n', ...
                       acq.acq_tag, preproc_cond);
             end 
-            files_fix{end+1} = file_fix;
+            files_fix{end+1} = file_fix{1};
 
         end
         files_to_sync = [files_raw files_fix];
@@ -249,6 +249,8 @@ end
 
 preproc_folder = sprintf('preproc_%s', get_ppl_tag());
 
+all_features = dictionary();
+
 for iacq=1:length(acq_defs)
     acq_name = acq_defs(iacq).acq_name;
     subject_tag = acq_defs(iacq).subject_tag;
@@ -259,9 +261,9 @@ for iacq=1:length(acq_defs)
     if isempty(sFile_chan_fix)
         warning('Cannot find "preproc/Raw_Chan_Fix" data for "%s".', acq_name);
         continue;
-    elseif iscell(sFile_chan_fix) && length(file_raw) > 1
+    elseif iscell(sFile_chan_fix) && length(sFile_chan_fix) > 1
         warning('Expect only 1 raw file "preproc/Raw_Chan_Fix", but %d found for "%s".',  ...
-            length(file_raw), acq_name);
+            length(sFile_chan_fix), acq_name);
         continue;
     end
 
@@ -349,7 +351,7 @@ for iacq=1:length(acq_defs)
             for igap=1:length(options.gaps)
                 gap_ichannel = find(~cellfun(@isempty, regexp(channel_labels, options.gaps(igap).channel_label)));
                 if isempty(gap_ichannel)
-                    error('No channel matching %s for gap filling', options.gaps(igap).channel_label);
+                    warning('No channel matching %s for gap filling', options.gaps(igap).channel_label);
                 end
                 fgap_item = [acq_name '/' proc_folder '/' prefix options.gaps(igap).event_label '_filled' ];
                 [sFile_fgaps, redone] = nst_run_bst_proc(fgap_item, 0, ...
@@ -361,7 +363,67 @@ for iacq=1:length(acq_defs)
             end
         end
 
+        if options.pulsatility.do
+            pulsatility_item = [acq_name '/' proc_folder '/' prefix 'pulsatility' ];
+            
+            [sFile_puls, redone] = nst_run_bst_proc(pulsatility_item, 0, ...
+                                                    'process_psa_pulsatility', sFile_fgaps, [], ...
+                                                    'timewindow',    [], ...
+                                                    'use_discard_channel_events',   1, ...
+                                                    'channelnames',  strjoin(channel_labels(cfbi_idx_chans), ','), ...
+                                                    'heart_beat_event', options.heart_beats.event_name, ...
+                                                    'function', 'pulse_amplitude_normed'); 
+            % TODO remove discard_ events
+            if options.pulsatility_az
+                %Extrait les statistiques de l'indice de pulsatilité pour chaque canal valide
+                % pour chaque canal CBFi valide (non marqué "bad") dans le fichier Brainstorm correspondant.
+                % Les résultats sont stockés dans les structures ar_indices et pulsatility_indices pour export ultérieur.
+                [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( sFile_puls, cfbi_idx_chans, channel_labels, ar_indices, ...
+                                                                                    pulsatility_indices, i_ar_index, subject_tag, suffix,options);
+            else
+                pulsatility_avg_item = [acq_name '/' proc_folder '/' prefix 'pulsatility_avg' ];
+                [sFile_puls_avg, redone] = nst_run_bst_proc(pulsatility_avg_item, 0, ...
+                                                            'process_psa_average_time_robust', sFile_puls, [], ...
+                                                            'pct_filter_range', [5, 95], ...
+                                                            'use_discard_events',   0, ...
+                                                            'avg_func',  'mean', ...  % Arithmetic average:  mean(x)
+                                                            'overwrite',        0);
+    
+                pulsatility_avg_data = in_bst(sFile_puls_avg);
+
+                for chan_idx=cfbi_idx_chans
+                    if pulsatility_avg_data.ChannelFlag(chan_idx) == 1
+                        pi = pulsatility_avg_data.F(chan_idx, 1);
+                        tcd_chan_label = channel_labels{chan_idx};
+                        pi_label = protect_field_label(['Pulsatility_' tcd_chan_label suffix]);
+                        key = {{subject_tag, pi_label}};
+                        if isConfigured(all_features) && isKey(all_features, key)
+                            error('%s already computed for %s, duplicate condition or duplicate entry in manifest?', pi_label, subject_tag);
+                        end
+                        all_features(key) = pi;
+                    end
+                end
+
+            end
+        end
         
+        bp_channel_idx = ismember(channel_labels, BP_channel_label);
+        dataMat = in_bst_data(sFile_fgaps, 'ChannelFlag', 'Events', 'Time');
+
+        if all(bp_channel_idx==0) || dataMat.ChannelFlag(bp_channel_idx) == -1
+            warning('No BP channel available in %s, autoregulation not computed.', ...
+                    acq_name)
+            continue;
+        end
+
+        events = dataMat.Events;
+        idiscard_evt = find(strcmp('discard_BP', {events.label}));
+        if ~isempty(idiscard_evt) && sum(diff(events(idiscard_evt).times)) / diff(dataMat.Time([1 end])) > 0.5
+            warning('Ignore BP %s signal because more than 50% is discarded', ...
+                    condition);
+            continue;
+        end
+        % TODO properly discard BP    
         mx_item = [acq_name '/' proc_folder '/' prefix 'Mx' ];
         % TODO expose otions for block size and pct filter
         [sFile_mx, redone] = nst_run_bst_proc(mx_item, 0, ...
@@ -409,12 +471,15 @@ for iacq=1:length(acq_defs)
             end
         end
 
-        tfa_item = [acq_name '/' proc_folder '/' prefix 'TFA' ];
-        [sFile_tfa, redone] = nst_run_bst_proc(tfa_item, 0, ...
-                                                'process_psa_tfa', sFile_mov_avg, [], ...
-                                                'ref_channel', BP_channel_label, ...
-                                                'transfer_channels', channel_labels(cfbi_idx_chans));
-
+        do_tfa = 0;
+        if do_tfa
+            tfa_item = [acq_name '/' proc_folder '/' prefix 'TFA' ];
+            [sFile_tfa, redone] = nst_run_bst_proc(tfa_item, 0, ...
+                                                    'process_psa_tfa', sFile_mov_avg, [], ...
+                                                    'ref_channel', BP_channel_label, ...
+                                                    'transfer_channels', channel_labels(cfbi_idx_chans));
+            tfa_data = in_bst(sFile_tfa);
+        end
         corr_item = [acq_name '/' proc_folder '/' prefix 'corr' ];
         [sFile_corr, redone] = nst_run_bst_proc(corr_item, 0, ...
                                                 'process_corr1n', sFile_mov_avg, [], ...
@@ -433,7 +498,7 @@ for iacq=1:length(acq_defs)
         iBP_chan = strcmp(BP_channel_label, corr_data.RowNames);
         MatFlag = in_bst_data(sFile_mov_avg, 'ChannelFlag');
 
-        tfa_data = in_bst(sFile_tfa);
+        
         mx_data = in_bst(sFile_mx);
         for i_tcd_chan=1:length(cfbi_idx_chans)
             tcd_chan_label = channel_labels{cfbi_idx_chans(i_tcd_chan)};
@@ -448,7 +513,7 @@ for iacq=1:length(acq_defs)
 
             if isempty(corr_tcd_idx_chan)
                 if MatFlag.ChannelFlag(cfbi_idx_chans(i_tcd_chan)) == 1
-                    error('TCD channel %s not found in correlation matrix for Mx computation', tcd_chan_label);
+                    error('TCD channel %s not found in correlation matrix for Mx mova computation', tcd_chan_label);
                 else
                     continue
                 end
@@ -457,83 +522,99 @@ for iacq=1:length(acq_defs)
             mx_index_label = protect_field_label(['AR_Mx_block_' tcd_chan_label]);
             i_mx = strcmp(mx_index_label, mx_data.Description);
             ar_index_label = [mx_index_label suffix];
-            if ~isnan(ar_indices(i_ar_index).(ar_index_label))
+            key = {{subject_tag, ar_index_label}};
+            if isConfigured(all_features) &&  isKey(all_features, key)
                 error('%s already computed for %s, duplicate condition or duplicate entry in manifest?', ar_index_label, subject_tag);
             end
-            % fprintf('Set %s for %s\n', ar_index_label, subject_tag);
-            ar_indices(i_ar_index).(ar_index_label) = mx_data.Value(i_mx);
-
-            ar_mx_mova = corr_mat(iBP_chan, corr_tcd_idx_chan);
-            ar_index_label = protect_field_label(['AR_Mx_mova_' tcd_chan_label suffix]);
-            if ~isnan(ar_indices(i_ar_index).(ar_index_label))
-                error('%s already computed for %s, duplicate condition or duplicate entry in manifest?', ar_index_label, subject_tag);
+            if MatFlag.ChannelFlag(cfbi_idx_chans(i_tcd_chan)) == 1
+                all_features(key) = mx_data.Value(i_mx);
             end
-            ar_indices(i_ar_index).(ar_index_label) = ar_mx_mova;
 
-            for itfa_idx=1:length(tfa_index_labels)
-                tfa_index_label = protect_field_label([tfa_index_labels{itfa_idx} '_' tcd_chan_label suffix]);
-                
-                i_tfa = strcmp(tfa_index_label, tfa_data.Description);
-                ar_indices(i_ar_index).([tfa_index_label suffix]) = tfa_data.Value(i_tfa);
-            end
+            % ar_mx_mova = corr_mat(iBP_chan, corr_tcd_idx_chan);
+            % ar_index_label = protect_field_label(['AR_Mx_mova_' tcd_chan_label suffix]);
+            % if ~isnan(ar_indices(i_ar_index).(ar_index_label))
+            %     error('%s already computed for %s, duplicate condition or duplicate entry in manifest?', ar_index_label, subject_tag);
+            % end
+            % 
+            % for itfa_idx=1:length(tfa_index_labels)
+            %     tfa_index_label = protect_field_label([tfa_index_labels{itfa_idx} '_' tcd_chan_label suffix]);
+            % 
+            %     i_tfa = strcmp(tfa_index_label, tfa_data.Description);
+            %     ar_indices(i_ar_index).([tfa_index_label suffix]) = tfa_data.Value(i_tfa);
+            % end
         end
 
-        if options.pulsatility.do
-            pulsatility_item = [acq_name '/' proc_folder '/' prefix 'pulsatility' ];
-            
-            [sFile_puls, redone] = nst_run_bst_proc(pulsatility_item, 0, ...
-                                                    'process_psa_pulsatility', sFile_fgaps, [], ...
-                                                    'timewindow',    [], ...
-                                                    'use_discard_events',   1, ...
-                                                    'channelnames',  strjoin(channel_labels(cfbi_idx_chans), ','), ...
-                                                    'heart_beat_event', options.heart_beats.event_name, ...
-                                                    'timeres',       'none', ...  % None
-                                                    'avgwinlength',  1, ...
-                                                    'avgwinoverlap', 50, ...
-                                                    'scalarprod',    0, ...
-                                                    'outputmode',    'input');  % separately for each file
-            % TODO remove discard_ events
-            if options.pulsatility_az
-                %Extrait les statistiques de l'indice de pulsatilité pour chaque canal valide
-                % pour chaque canal CBFi valide (non marqué "bad") dans le fichier Brainstorm correspondant.
-                % Les résultats sont stockés dans les structures ar_indices et pulsatility_indices pour export ultérieur.
-                [ar_indices, pulsatility_indices] = extract_pulsatility_stats_block( sFile_puls, cfbi_idx_chans, channel_labels, ar_indices, ...
-                                                                                    pulsatility_indices, i_ar_index, subject_tag, suffix,options);
-            else
-                pulsatility_avg_item = [acq_name '/' proc_folder '/' prefix 'pulsatility_avg' ];
-                [sFile_puls_avg, redone] = nst_run_bst_proc(pulsatility_avg_item, 0, ...
-                                                            'process_psa_average_time_robust', sFile_puls, [], ...
-                                                            'pct_filter_range', [5, 95], ...
-                                                            'use_discard_events',   0, ...
-                                                            'avg_func',  'mean', ...  % Arithmetic average:  mean(x)
-                                                            'overwrite',        0);
-    
-                pulsatility_avg_data = in_bst(sFile_puls_avg);
 
-                for chan_idx=cfbi_idx_chans
-                    if pulsatility_avg_data.ChannelFlag(chan_idx) == 1
-                        pi = pulsatility_avg_data.F(chan_idx, 1);
-                        tcd_chan_label = channel_labels{chan_idx};
-                        pi_label = protect_field_label(['Pulsatility_' tcd_chan_label suffix]);
-                        ar_indices(i_ar_index).(pi_label) = pi;
-                    end
-                end
-
-            end
-        end
     end % end of loop over conditions (eg rest, stand)
 end % end of loop over acquisitions
 
-ar_table = struct2table(ar_indices, 'AsArray', true); %just added ", 'AsArray', true"
-ar_table_fn = fullfile(options.result_dir, 'autoregulation_indices.xlsx');
-write_log(sprintf('Save AR index table to %s \n', strrep(ar_table_fn, '\', '\\')));
-writetable(ar_table, ar_table_fn, 'WriteRowNames', true); 
+feature_table = dict_to_table(all_features, {'subject_id'});
+outputFile = fullfile(options.result_dir, 'hemodynamics.xlsx');
+writetable(feature_table, outputFile, 'Sheet', 'Hemodynamics_Features');
+disp(feature_table);
+fprintf('Wrote %d rows and %d columns to %s\n', ...
+        height(feature_table), width(feature_table), outputFile);
+end
 
-if options.pulsatility.do             
-    if options.make_figs % Génère le graphique à barres groupées à partir du fichier .tsv
-        plot_grouped_pulsatility_avg(ar_table_fn, options.fig_dir);
+function table_out = dict_to_table(dict, var_names)
+
+allKeys     = keys(dict);     % cell array of 1×4 cells
+allMeasures = values(dict);   % numeric column vector
+
+% Unpack each heterogeneous key into its components
+n_entries = numel(allKeys);
+
+% Pre-allocate index columns as cells (since types may vary)
+nb_vars = length(var_names);
+columns = cell(nb_vars, n_entries);
+labelCol = strings(n_entries, 1);   % measure_label is always a string
+
+for i_entry = 1:n_entries
+    thisKey = allKeys{i_entry};
+    if length(thisKey)-1 ~= nb_vars
+        error('Entry size in dict inconstistent with number of given variables');
+    end
+    for  icol=1:nb_vars
+        columns{icol, i_entry} = thisKey{icol};
+    end
+    labelCol(i_entry) = string(thisKey{icol+1});
+end
+
+% Convert each index column to its most natural MATLAB type
+columns_normed = cell(n_entries, nb_vars+2);
+for icol=1:nb_vars
+    col = normalizeColumn(columns(icol, :));
+    for i_entry=1:n_entries
+        columns_normed{i_entry, icol} = col{i_entry};
     end
 end
+for i_entry=1:n_entries
+    columns_normed{i_entry, icol+1} = labelCol{i_entry};
+    columns_normed{i_entry, icol+2} = allMeasures(i_entry);
+end
+% Long-format table
+table_long = cell2table(columns_normed, 'VariableNames', [var_names {'measure_label','measure_value'}]);
+
+% Pivot to wide format: one column per measure label
+table_out = unstack(table_long, 'measure_value', 'measure_label');
+end
+
+%% Helper: collapse a cell column to a homogeneous type when possible
+function out = normalizeColumn(c)
+    % If every element is numeric scalar, return a numeric column.
+    % If every element is char/string, return a string column.
+    % Otherwise, leave it as a cell column (mixed types).
+    
+    isAllNumeric = all(cellfun(@(x) isnumeric(x) && isscalar(x), c));
+    isAllText    = all(cellfun(@(x) ischar(x) || isstring(x), c));
+    
+    if isAllNumeric
+        out = cell2mat(c);
+    elseif isAllText
+        out = string(c);
+    else
+        out = c;   % keep heterogeneous as cell
+    end
 end
 
 function preprocessing(acq_defs, options)
