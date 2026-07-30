@@ -425,12 +425,17 @@ for iacq=1:length(acq_defs)
         sFile_nirs = sFiles_nirs_conds{icond};
         sFile_aux = sFiles_aux_conds{icond};
         
-        data_aux_tmp = in_bst_data(sFile_aux, 'Events', 'Time');
+        data_aux_tmp = in_bst_data(sFile_aux, 'Events', 'Time', 'ChannelFlag');
         aux_events = data_aux_tmp.Events;
         idiscard_evt = find(strcmp('discard_BP', {aux_events.label}));
         if ~isempty(idiscard_evt) && sum(diff(aux_events(idiscard_evt).times)) / diff(data_aux_tmp.Time([1 end])) > 0.5
             warning('Ignore AUX BP %s signal because more than 50% is discarded', ...
                     condition);
+            continue;
+        end
+        ichan_BP = find(~cellfun(@isempty, regexp(channel_labels, BP_channel_label)));
+        if isempty(ichan_BP) || data_aux_tmp.ChannelFlag(ichan_BP) ~= 1
+            warning('No BP available for %s - %s', subject_name, condition)
             continue;
         end
         % TODO expose option for pct filter
@@ -454,7 +459,7 @@ outputFile = fullfile(options.result_dir, 'hemodynamics.xlsx');
 writetable(feature_table, outputFile, 'Sheet', 'Hemodynamics_Features');
 fprintf('Wrote %d rows and %d columns to %s\n', ...
         height(feature_table), width(feature_table), outputFile);
-
+disp(feature_table);
 end % end main pipeline function
 
 
