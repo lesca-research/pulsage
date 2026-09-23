@@ -115,8 +115,8 @@ for ichan=1:nb_channels
     
     nb_samples = length(channel_data);
     
-    low = round(sProcess.options.pct_filter_range.Value{1}(1)/100 * nb_samples);
-    high = round(sProcess.options.pct_filter_range.Value{1}(2)/100 * nb_samples);
+    low = min(1, round(sProcess.options.pct_filter_range.Value{1}(1)/100 * nb_samples));
+    high = max(1, round(sProcess.options.pct_filter_range.Value{1}(2)/100 * nb_samples));
     [sorted_data, sort_idx] = sort(channel_data);
     time_tmp = time_tmp(sort_idx);
     channel_data = sorted_data(low:high);
