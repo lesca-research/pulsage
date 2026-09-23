@@ -40,21 +40,25 @@ sProcess.OutputTypes = {'data', 'data'};
 sProcess.nInputs     = 1;
 sProcess.nMinFiles   = 1;
 % Definition of the options
-sProcess.options.option_event_name.Comment = 'Name of event group defining gaps: ';
-sProcess.options.option_event_name.Type    = 'text';
-sProcess.options.option_event_name.Value   = 'Gap';
+sProcess.options.event_prefix.Comment = 'Prefix of event name defining channel-specific gaps (eg gap_<channel_name>): ';
+sProcess.options.event_prefix.Type    = 'text';
+sProcess.options.event_prefix.Value   = 'gap_';
 
-sProcess.options.option_channels.Comment = 'Channels (comma-separated types or names): ';
-sProcess.options.option_channels.Type    = 'text';
-sProcess.options.option_channels.Value   = '';
+sProcess.options.channels.Comment = 'Channels (comma-separated types or names): ';
+sProcess.options.channels.Type    = 'text';
+sProcess.options.channels.Value   = '';
 
-sProcess.options.option_ar_win_size.Comment = 'Window size for AR estimation';
-sProcess.options.option_ar_win_size.Type    = 'value';
-sProcess.options.option_ar_win_size.Value   = {15, 'sec', 2};   
+sProcess.options.ar_win_size.Comment = 'Window size for AR estimation';
+sProcess.options.ar_win_size.Type    = 'value';
+sProcess.options.ar_win_size.Value   = {15, 'sec', 2};   
 
-sProcess.options.option_ar_order.Comment = 'AR order (~duration of one period)';
-sProcess.options.option_ar_order.Type    = 'value';
-sProcess.options.option_ar_order.Value   = {1, 'sec', 2};
+sProcess.options.ar_order.Comment = 'AR order (~duration of one period)';
+sProcess.options.ar_order.Type    = 'value';
+sProcess.options.ar_order.Value   = {1, 'sec', 2};
+
+sProcess.options.remove_gap_events.Comment = 'Remove gap events';
+sProcess.options.remove_gap_events.Type    = 'checkbox';
+sProcess.options.remove_gap_events.Value   = 1;
 end
 
 %% ===== FORMAT COMMENT =====
@@ -77,7 +81,6 @@ end
 % end
 
 % Get selected events
-event_name =  strtrim(sProcess.options.option_event_name.Value);
 
 for iInput=1:length(sInputs)
     % Load recordings
@@ -90,63 +93,50 @@ for iInput=1:length(sInputs)
         events = sDataRaw.F.events;
     end
     
-    event = [];
-    ievt_fgap = [];
-    for ievt=1:length(events)
-        if strcmp(events(ievt).label, event_name)
-            event = events(ievt);
-            ievt_fgap = ievt;
-            break;
-        end
-    end
-    if isempty(event)
-        warning(['Event "' event_name '" does not exist in file.']);
-    end
-
-    if isempty(event) || isempty(event.times) % no marked event
-        signal_filled = sDataIn.F';
-    else
-        dt = diff(sDataIn.Time(1:2));
-        ar_win_len = round(sProcess.options.option_ar_win_size.Value{1} / dt);
-        ar_order = round(sProcess.options.option_ar_order.Value{1} / dt);
-        channels = in_bst_channel(sInputs(iInput).ChannelFile);
-        nb_channels = size(channels.Channel, 2);
-        
-        if ~isempty(sProcess.options.option_channels.Value)
-            idx_chans = channel_find(channels.Channel, sProcess.options.option_channels.Value);
-            main_chan_mask = false(1, nb_channels);
-            main_chan_mask(idx_chans) = 1;
-        else
-            main_chan_mask = true(1, nb_channels);
-        end
-
-        signal = sDataIn.F';
-        samples = time_to_sample_idx(event.times, sDataIn.Time);
-        to_fill = false(size(signal));
-        for ievt=1:size(event.times, 2)
-            if isempty(event.channels) || isempty(event.channels{ievt}) % apply to all channels
-                chan_mask = main_chan_mask;
-            else
-                % ignore main channel filter and use channel of event
-                chan_mask = strcmp(event.channels{ievt}, {channels.Channel.Name});
-            end
-            to_fill(samples(1, ievt):samples(2, ievt), chan_mask) = 1;
-        end
-        signal_filled = Compute(signal, ar_win_len, to_fill, ar_order);
-    end
+    dt = diff(sDataIn.Time(1:2));
+    ar_win_len = round(sProcess.options.ar_win_size.Value{1} / dt);
+    ar_order = round(sProcess.options.ar_order.Value{1} / dt);
+    channels = in_bst_channel(sInputs(iInput).ChannelFile);
+    nb_channels = size(channels.Channel, 2);
     
+    chan_mask = (sDataIn.ChannelFlag == 1)'; 
+    if ~isempty(sProcess.options.channels.Value)
+        idx_chans = channel_find(chanMat.Channel, sProcess.options.channels.Value);
+        chan_mask_tmp = false(1, nb_channels);
+        chan_mask_tmp(idx_chans) = true;
+        chan_mask = chan_mask & chan_mask_tmp;
+    end
+    signal = sDataIn.F(chan_mask, :);
+
+    extra_nans = isnan(signal);
+    if any(any(extra_nans))
+        error('Nans in input signal');
+    end
+    signal_curated = process_psa_curate_event("Compute", signal, sDataIn.Time, ...
+                                                 events, channels.Channel(chan_mask), ...
+                                                 [], [], {sProcess.options.event_prefix.Value});
+
+    
+    signal_filled = fillgaps(signal_curated', ar_win_len, ar_order)';
+
+    % coi=7; figure(); hold on; plot(sDataIn.Time, signal(coi, :), 'k'); plot(sDataIn.Time, signal_curated(coi, :), 'r'); plot(sDataIn.Time, signal_filled(coi, :), 'b');
+    signal_final = sDataIn.F;
+    signal_final(chan_mask, :) = signal_filled;
+
     % Save time-series data
     sDataOut = db_template('data');
-    sDataOut.F            = signal_filled';
+    sDataOut.F            = signal_final;
     sDataOut.Comment      = 'Gap-filled';
     sDataOut.ChannelFlag  = sDataIn.ChannelFlag;
     sDataOut.Time         = sDataIn.Time;
     sDataOut.DataType     = 'recordings';
     sDataOut.nAvg         = 1;
-    if ~isempty(ievt_fgap)
-        sDataOut.Events       = events([1:(ievt_fgap-1) (ievt_fgap+1):length(events)]);
+    pattern = [sProcess.options.event_prefix.Value '.*'];
+    mask_evt_fgap = ~cellfun(@isempty, regexpi({events.label}, pattern));
+    if sProcess.options.remove_gap_events.Value && ~isempty(mask_evt_fgap)
+        sDataOut.Events = events(~mask_evt_fgap);
     else
-        sDataOut.Events       = events;
+        sDataOut.Events = events;
     end
     sDataOut.DisplayUnits = sDataIn.DisplayUnits;
     
@@ -167,7 +157,7 @@ function [sig_filled] = Compute(sig, AR_win_len, fill_mask, AR_order) %#ok<DEFNU
 %
 % Args
 %    - sig: matrix of double, size: time x nb_channels
-%        signals to be corrected
+%        signals to be filled
 %    - AR_win_len: integer (nb of samples)
 %        Window size of the left and right signal chunks around the gap
 %        on which the AR model is fitted.
