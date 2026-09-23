@@ -57,6 +57,10 @@ sProcess.options.pct_filter.Comment = 'Percentage of extreme values to filter: '
 sProcess.options.pct_filter.Type    = 'value';
 sProcess.options.pct_filter.Value   = {5, '%', 0};
 
+sProcess.options.max_nan_pct.Comment = 'Percentage of NaN values allowed per block: ';
+sProcess.options.max_nan_pct.Type    = 'value';
+sProcess.options.max_nan_pct.Value   = {25, '%', 0};
+
 end
 
 %% ===== FORMAT COMMENT =====
@@ -91,7 +95,9 @@ for iInput=1:length(sInputs)
         idx_chan = cbf_sig_idx_chan(ichan);
         cbf_signal = sDataIn.F(idx_chan, :);      
         block_size = round(sProcess.options.block_duration.Value{1} / dt);
-        mx_out = Compute(ref_signal, cbf_signal, block_size, sProcess.options.pct_filter.Value{1}/100, channels.Channel(idx_chan).Name);
+        mx_out = Compute(ref_signal, cbf_signal, block_size, ...
+                         sProcess.options.pct_filter.Value{1}/100, ...
+                         sProcess.options.max_nan_pct.Value{1}/100);
         chan_name = channels.Channel(idx_chan).Name;
         mx_values.(protect_field_label(['AR_Mx_block_' chan_name])) = mx_out;
     end   
@@ -110,7 +116,7 @@ end
 
 
 %% ===== Compute =====
-function [Mx] = Compute(bp_signal, cbfi_signal, block_size, pct_filter, channel_name)
+function [Mx] = Compute(bp_signal, cbfi_signal, block_size, pct_filter, max_nan_prop)
 
 if size(bp_signal, 1) > size(bp_signal, 2)
     block_window = [block_size, 1];
@@ -119,20 +125,53 @@ else
 end
 
 % fprintf('Compute blocks\n');
-bp_signal_block = blockproc(bp_signal, block_window, @(x)mean(x.data));
-cbfi_signal_block = blockproc(cbfi_signal, block_window, @(x)mean(x.data));
+bp_signal_blockproc = blockproc(bp_signal, block_window, @(x)mean(x.data));
+bp_signal_block_test = block_avg(bp_signal, block_size, -1);
+assert(isequaln(bp_signal_block_test, bp_signal_blockproc));
+
+bp_signal_block = block_avg(bp_signal, block_size, 1-max_nan_prop);
+cbfi_signal_block = block_avg(cbfi_signal, block_size, 1-max_nan_prop);
+
+m_nan = isnan(bp_signal_block) | isnan(cbfi_signal_block);
+bp_signal_block = bp_signal_block(~m_nan);
+cbfi_signal_block = cbfi_signal_block(~m_nan);
 
 % fprintf('Filter blocks\n');
 [bp_signal_block_filtered, cbfi_signal_block_filtered] = pct_filter2(bp_signal_block, cbfi_signal_block, pct_filter);
 
-% fprintf('Compute block correlations\n');
-[r, p] = corrcoef(bp_signal_block_filtered, cbfi_signal_block_filtered);
-
-if p > 0.05
-    warning('%s: No significant correlation between block signals of BP and CBFi', channel_name);
+% TODO expose minimum number of blocks
+if length(bp_signal_block_filtered) >= 10
+    % fprintf('Compute block correlations\n');
+    [r, p] = corrcoef(bp_signal_block_filtered, cbfi_signal_block_filtered);
+    
+    if p > 0.05
+        warning('No significant correlation between block signals of BP and CBFi (r=%1.2f)', r(1,2));
+    end
+    
+    Mx = r(1,2);
+else
+    warning('No enough blocks (%d) to compute Mx', length(bp_signal_block_filtered));
+    Mx = NaN;
+end
 end
 
-Mx = r(1,2);
+function block_signal = block_avg(signal, block_size, prop_min_valid_values)
+nb_samples = length(signal);
+nb_blocks = ceil(nb_samples / block_size);
+block_signal = nan(1, nb_blocks);
+for iblock=1:nb_blocks
+    block_smpl_start = ((iblock-1) * block_size ) + 1;
+    block_smpl_end = min(nb_samples, block_smpl_start + block_size - 1);
+    chunk = signal(block_smpl_start:block_smpl_end);
+    if prop_min_valid_values == -1
+        block_signal(iblock) = mean(chunk);
+    elseif sum(~isnan(chunk))/block_size >= prop_min_valid_values
+        if any(isnan(chunk))
+            fprintf('%d nans ignored in block %d\n', sum(isnan(chunk)), iblock);
+        end
+        block_signal(iblock) = mean(chunk, "omitnan");
+    end
+end
 end
 
 function [sig1_filtered, sig2_filtered] = pct_filter2(sig1, sig2, pct)
