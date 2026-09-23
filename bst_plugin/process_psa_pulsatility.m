@@ -66,14 +66,6 @@ sProcess.options.function.Comment = {'Pulse CBF', ...
 sProcess.options.function.Type    = 'radio_label';
 sProcess.options.function.Value   = 'pulse_amplitude_normed';
 
-sProcess.options.use_discard_channel_events.Comment = 'Use discard_<channel> events to discard channel-specific segments';
-sProcess.options.use_discard_channel_events.Type       = 'checkbox';
-sProcess.options.use_discard_channel_events.Value      = 1;
-
-sProcess.options.discard_global_events.Comment = 'Discard events (apply to all channels, coma-separated):';
-sProcess.options.discard_global_events.Type    = 'text';
-sProcess.options.discard_global_events.Value   = ''; 
-
 end
 
 %% ===== FORMAT COMMENT =====
@@ -101,80 +93,36 @@ for iInput=1:length(sInputs)
     nb_channels = size(channels.Channel, 2);
     if ~isempty(sProcess.options.channelnames.Value)
         idx_chans = channel_find(channels.Channel, sProcess.options.channelnames.Value);
-        chan_mask = false(1, nb_channels);
-        chan_mask(idx_chans) = 1;
     else
-        chan_mask = true(1, nb_channels);
+        idx_chans = 1:nb_channels;
     end
-
-    
-    % Filter channel-specific discard segments
-    if sProcess.options.use_discard_channel_events.Value
-        time_mask = discard_channels_time_mask(events, channel_names, sDataIn.Time);
-    else
-        time_mask = true(nb_channels, size(sDataIn.Time, 2));
-    end
-
-    % Filter global discard segments
-    if ~isempty(sProcess.options.discard_global_events.Value)
-       discard_event_names = cellfun(@strtrim, strsplit(sProcess.options.discard_global_events.Value, ','),...
-                                     'UniformOutput', 0);
-       sfreq = 1/diff(sDataIn.Time(1:2));
-       global_time_mask = true(size(sDataIn.Time, 2), 1);
-       for idiscard_event=1:length(discard_event_names)
-            idiscard_evt = find(strcmp(discard_event_names{idiscard_event}, {events.label}));
-            if ~isempty(idiscard_evt)
-                event_times = events(idiscard_evt).times;
-                for evt_idx=1:size(event_times, 2)
-                   for isegment=1:size(event_times, 2)
-                       time_bounds = event_times(:, isegment);
-                       samplesBounds = [round((time_bounds(1)-sDataIn.Time(1)) * sfreq) + 1, ...
-                                        round((time_bounds(2)-sDataIn.Time(1)) * sfreq)];
-                       global_time_mask(samplesBounds(1):samplesBounds(2)) = false;
-                   end
-                end
-            end
-       end
-       prop_discard = 1 - sum(global_time_mask)/size(sDataIn.Time, 2);
-       fprintf('Percent of signal discarded (non-channel-specific) : %1.0f%%\n', ...
-               prop_discard * 100);
-    
-       for ichan=1:nb_channels
-            time_mask(ichan, :) = time_mask(ichan, :) & global_time_mask';
-       end
-    end
-    time_mask(~chan_mask, :) = false;
 
     ievent = strcmp(sProcess.options.heart_beat_event.Value, ...
                     {events.label});
 
     pulsatility = nan(length(events(ievent).times(1,:)) - 1, nb_channels);
-    for chan_idx = 1:nb_channels
-        if sum(time_mask(chan_idx, :)) / size(sDataIn.Time, 2) > 0.5
-            sig_chan = sDataIn.F(chan_idx, :)';
-            time_mask_chan = time_mask(chan_idx, :);
-            if sProcess.options.flip_sign.Value
-                sig_chan = sig_chan * -1;
-            end
-    
-            switch sProcess.options.function.Value
-                case 'pCBF'
-                    func = @gradient_max;
-                case 'tt_pCBF'
-                    func = @gradient_argmax;
-                case 'pulse_amplitude'
-                    func = @pulse_amplitude;
-                case 'pulse_amplitude_normed'
-                    func = @pulse_amplitude_normed;
-                case 'heart_rate'
-                    func = @heart_rate;
-            end
-            [puls_chan, pulsatility_time] = apply_on_epochs(sig_chan, sDataIn.Time, ...
-                                                            time_mask_chan, ...
-                                                            events(ievent).times(1,:),...
-                                                            func, channel_names{chan_idx});
-            pulsatility(:, chan_idx) = puls_chan;
+    for chan_idx = idx_chans
+        sig_chan = sDataIn.F(chan_idx, :)';
+        if sProcess.options.flip_sign.Value
+            sig_chan = sig_chan * -1;
         end
+
+        switch sProcess.options.function.Value
+            case 'pCBF'
+                func = @gradient_max;
+            case 'tt_pCBF'
+                func = @gradient_argmax;
+            case 'pulse_amplitude'
+                func = @pulse_amplitude;
+            case 'pulse_amplitude_normed'
+                func = @pulse_amplitude_normed;
+            case 'heart_rate'
+                func = @heart_rate;
+        end
+        [puls_chan, pulsatility_time] = apply_on_epochs(sig_chan, sDataIn.Time, ...
+                                                          events(ievent).times(1,:),...
+                                                          func, channel_names{chan_idx});
+        pulsatility(:, chan_idx) = puls_chan;
     end
 
     %iSamples = round((pulsatility_time - sDataIn.Time(1))  / diff(sDataIn.Time(1:2)));
@@ -221,7 +169,7 @@ end
 end
 
 
-function [values, times] = apply_on_epochs(signal, signal_time, time_mask, epoch_times, func, channel_name)
+function [values, times] = apply_on_epochs(signal, signal_time, epoch_times, func, channel_name)
 
 sampling_freq = 1 ./ diff(signal_time(1:2));
 epoch_samples = round((epoch_times-signal_time(1)) .* sampling_freq) + 1;
@@ -232,13 +180,15 @@ for iepoch=1:(length(epoch_samples)-1)
     if epoch_samples(iepoch) == epoch_samples(iepoch+1)
         error('Epoch too short at %f s', epoch_samples(iepoch)/sampling_freq + signal_time(1))
     end
-    [value, time] = func(signal(epoch_samples(iepoch):epoch_samples(iepoch+1), :), ...
+    if ~any(isnan(signal(epoch_samples(iepoch):epoch_samples(iepoch+1))))
+        [value, time] = func(signal(epoch_samples(iepoch):epoch_samples(iepoch+1), :), ...
                          signal_time(epoch_samples(iepoch):epoch_samples(iepoch+1)));
-    if all(time_mask(epoch_samples(iepoch):epoch_samples(iepoch+1)))
         values(iepoch,:) = value;
     % else
     %     fprintf('Channel %s: Ignore cardiac epoch from %1.1fs to %1.1fs because it contains a discard segment\n', ...
     %             channel_name, signal_time(epoch_samples(iepoch)), signal_time(epoch_samples(iepoch+1)));
+    else
+        time = mean(signal_time(epoch_samples(iepoch):epoch_samples(iepoch+1)));
     end
     times(1, iepoch) = time;
 end
