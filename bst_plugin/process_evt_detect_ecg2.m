@@ -215,9 +215,29 @@ function OutputFiles = detect_event(sProcess, sInputs) %#ok<DEFNU>
         % Progress bar
         bst_progress('text', 'Detecting peaks...');
         bst_progress('set', progressPos + round(2 * iFile / length(sInputs) / 3 * 100));
-        % Perform detection
-        detectedEvt = Compute(F, TimeVector, OPTIONS, Fmask);
-
+        
+        detectedEvt = {};
+        for idx_chan=size(F, 1)
+            % Perform detection
+            peak_events = Compute(F(idx_chan, :), TimeVector, OPTIONS, Fmask);
+            if ~isempty(peak_events)
+                % Detect artifacts
+                artifact_events = process_evt_detect_artifacts("Compute", F(idx_chan, :), TimeVector, 'ECG');
+                artifact_events = [];
+                for i_events=1:length(peak_events)
+                    if ~isempty(artifact_events)
+                        % Filter peak times that are within artifactuel segments
+                        filtered_peaks_events = filter_events_within(peak_events{i_events}, artifact_events);
+                        if ~isempty(filtered_peaks_events)
+                            detectedEvt{end+1} = filtered_peaks_events;
+                        end
+                    else
+                        detectedEvt{end+1} = peak_events{i_events};
+                    end
+                end
+            end
+        end
+        
         % ===== CREATE EVENTS =====
         sEvent = [];
         % Basic events structure
@@ -286,6 +306,38 @@ function OutputFiles = detect_event(sProcess, sInputs) %#ok<DEFNU>
     OutputFiles = {sInputs(iOk).FileName};
 end
 
+
+function filtered_events = filter_events_within(events, discard_segments)
+%FILTER_EVENTS_WITHIN Remove events that fall within any discard segment.
+%
+%   filtered_events = FILTER_EVENTS_WITHIN(events, discard_segments)
+%
+%   events            - 1xN vector of time positions
+%   discard_segments  - 2xM matrix; discard_segments(1,m) is the start
+%                        and discard_segments(2,m) is the end of the
+%                        m-th segment to discard.
+%
+%   filtered_events   - events with all values lying inside any
+%                        [start, end] segment removed (inclusive bounds).
+
+    if isempty(discard_segments)
+        filtered_events = events;
+        return;
+    end
+
+    starts = discard_segments(1, :);
+    ends   = discard_segments(2, :);
+
+    % For each event, check if it falls within any [start, end] segment
+    % Using implicit expansion: events is 1xN, starts/ends are 1xM
+    % Compare events (Nx1) against starts/ends (1xM) -> NxM logical matrix
+    in_segment = (events(:) >= starts) & (events(:) <= ends);
+
+    % An event is discarded if it's within ANY segment
+    to_discard = any(in_segment, 2);
+
+    filtered_events = events(~to_discard(:).');
+end
 
 %% ===== PERFORM DETECTION =====
 % USAGE:      evt = Compute(F, TimeVector, OPTIONS, Fmask)
