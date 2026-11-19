@@ -184,7 +184,7 @@ switch action
 end
 
 if isempty(arg1)
-    error('Empty input acquisition definitions');
+    error('No input acquisition');
 else
     if isstruct(arg1)
         acq_defs = arg1;
@@ -215,37 +215,6 @@ preproc_folder = sprintf('preproc_%s', get_ppl_tag());
 
 BP_channel_label = options.BP_channel_label;
 CBFi_channel_labels = options.CBFi_channel_labels;
-
-% Initialise structure to store all AR indices
-ar_suffixes = {''};
-if ~isempty(options.conditions)     
-    for icond=1:length(options.conditions)
-        ar_suffixes{icond} = ['_' options.conditions{icond}];
-    end
-end
-
-tfa_index_labels = process_psa_tfa('tfa_index_labels');
-if options.pulsatility_az
-    pulsatility_index_labels = {'Pulsatility_avg', 'Pulsatility_std', 'Pulsatility_min', 'Pulsatility_max'};
-else
-    pulsatility_index_labels = {'Pulsatility'};
-end
-ar_index_labels = [{'AR_Mx_mova', 'AR_Mx_block'} tfa_index_labels pulsatility_index_labels];
-ar_indices = struct(); 
-ar_indices.Subject = '';
-for i_cbfi_chan=1:length(CBFi_channel_labels)
-    cbfi_chan_label = CBFi_channel_labels{i_cbfi_chan};
-    for i_ar_index=1:length(ar_index_labels)
-        ar_index_label = ar_index_labels{i_ar_index};
-        for isuffix=1:length(ar_suffixes)
-            ar_chan_index_label = protect_field_label([ar_index_label '_' ...
-                                                       cbfi_chan_label ...
-                                                       ar_suffixes{isuffix}]);
-            ar_indices.(ar_chan_index_label) = nan;
-        end
-    end
-end
-
 
 preproc_folder = sprintf('preproc_%s', get_ppl_tag());
 
@@ -312,7 +281,7 @@ for iacq=1:length(acq_defs)
                                                     'condition', '', ...
                                                     'eventname',  condition, ...
                                                     'timewindow',    [], ...
-                                                    'epochtime',     [-0.1, 0.3], ...
+                                                    'epochtime',     [], ...
                                                     'split',         0, ...
                                                     'createcond',    0, ...
                                                     'ignoreshort',   0, ...
@@ -330,7 +299,6 @@ for iacq=1:length(acq_defs)
             suffixes{end+1} = ['_' condition];
 
             spline_item = [acq_name '/' proc_folder '/' condition '_Spline' ];
-            %TODO implement spline fit
             [sFile_spline, redone] = nst_run_bst_proc(spline_item, 0, ...
                                                     'process_psa_spline_fit', sFile_cond, [], ...
                                                     'channel_names', strjoin(CBFi_channel_labels, ', '), ...
@@ -341,6 +309,18 @@ for iacq=1:length(acq_defs)
             sFiles_cond{end+1} = sFile_spline;
             prefixes{end+1} = [condition '_spline_'];
             suffixes{end+1} = ['_spline_' condition];
+
+            spline_item_no_gapf = [acq_name '/' proc_folder '/' condition '_Spline_no_gapfill' ];
+            [sFile_spline_no_gapf, redone] = nst_run_bst_proc(spline_item_no_gapf, 0, ...
+                                                        'process_psa_spline_fit', sFile_cond, [], ...
+                                                        'channel_names', CBFi_channel_labels, ...
+                                                        'use_gap_events', 0, ...
+                                                        'use_discard_events', 1, ...
+                                                        'prior_interpolation_dt', options.spline_fit.prior_interpolation_dt, ...
+                                                        'spline_knot_dt', options.spline_fit.knot_dt);
+            sFiles_cond{end+1} = sFile_spline_no_gapf;
+            prefixes{end+1} = [condition '_spline_no_gap_fill_'];
+            suffixes{end+1} = ['_spline_no_gap_fill_' condition];
         end
     else
         raw_copy_item = [acq_name '/' proc_folder '/' 'Raw' ];
@@ -351,16 +331,25 @@ for iacq=1:length(acq_defs)
 
         spline_item = [acq_name '/' proc_folder '/Spline' ];
         [sFile_spline, redone] = nst_run_bst_proc(spline_item, 0, ...
-                                                    'process_psa_spline_fit', sFile_chan_fix, [], ...
+                                                    'process_psa_spline_fit', sFile_cond, [], ...
                                                     'channel_names', CBFi_channel_labels, ...
                                                     'use_gap_events', 1, ...
                                                     'use_discard_events', 1, ...
                                                     'prior_interpolation_dt', options.spline_fit.prior_interpolation_dt, ...
                                                     'spline_knot_dt', options.spline_fit.knot_dt);
 
-        sFiles_cond = {sFile_cond, sFile_spline};
-        prefixes = {'' , 'spline_'};
-        suffixes = {'', '_spline'};
+        spline_item_no_gapf = [acq_name '/' proc_folder '/Spline_no_gapfill' ];
+        [sFile_spline_no_gapf, redone] = nst_run_bst_proc(spline_item_no_gapf, 0, ...
+                                                    'process_psa_spline_fit', sFile_cond, [], ...
+                                                    'channel_names', CBFi_channel_labels, ...
+                                                    'use_gap_events', 0, ...
+                                                    'use_discard_events', 1, ...
+                                                    'prior_interpolation_dt', options.spline_fit.prior_interpolation_dt, ...
+                                                    'spline_knot_dt', options.spline_fit.knot_dt);
+
+        sFiles_cond = {sFile_cond, sFile_spline, sFile_spline_no_gapf};
+        prefixes = {'' , 'spline_', 'spline_no_gap_fill_'};
+        suffixes = {'', '_spline', '_spline_no_gap_fill'};
     end
 
     for ifile=1:length(sFiles_cond)
@@ -390,7 +379,22 @@ for iacq=1:length(acq_defs)
                                         'discard_global_events', 'discard_cardiac, extrasystole', ...
                                         'channelnames',  strjoin(channel_labels(cfbi_idx_chans), ','));        
 
+        curated_no_gapf_puls_item = [acq_name '/' proc_folder '/' prefix 'no_gapf2_curated_for_puls' ];
+        [sFile_curated_no_gapf_puls, redone] = nst_run_bst_proc(curated_no_gapf_puls_item, 0, ...
+                                                        'process_psa_curate_event', sFiles_cond{ifile}, [], ...
+                                                        'use_discard_channel_events',   1, ...
+                                                        'discard_global_events', 'discard_cardiac, extrasystole', ...
+                                                        'channelnames',  strjoin(channel_labels(cfbi_idx_chans), ','));
+
         if options.pulsatility.do
+            pulsatility_item = [acq_name '/' proc_folder '/' prefix 'pulsatility_raw' ];
+            [sFile_puls_no_gapf, redone] = nst_run_bst_proc(pulsatility_item, 0, ...
+                                                    'process_psa_pulsatility', sFile_curated_no_gapf_puls, [], ...
+                                                    'timewindow',    [], ...
+                                                    'channelnames',  strjoin(channel_labels(cfbi_idx_chans), ','), ...
+                                                    'heart_beat_event', options.heart_beats.event_name, ...
+                                                    'function', 'pulse_amplitude_normed'); 
+
             pulsatility_item = [acq_name '/' proc_folder '/' prefix 'pulsatility' ];
             
             [sFile_puls, redone] = nst_run_bst_proc(pulsatility_item, 0, ...
@@ -408,7 +412,16 @@ for iacq=1:length(acq_defs)
                                                         'avg_func',  'mean', ...  % Arithmetic average:  mean(x)
                                                         'overwrite',        0);
 
+            pulsatility_no_gapf_avg_item = [acq_name '/' proc_folder '/' prefix 'no_gapf_pulsatility_avg' ];
+            [sFile_puls_nogapf_avg, redone] = nst_run_bst_proc(pulsatility_no_gapf_avg_item, 0, ...
+                                                        'process_psa_average_time_robust', sFile_puls_no_gapf, [], ...
+                                                        'pct_filter_range', [5, 95], ...
+                                                        'use_discard_events',   0, ...
+                                                        'avg_func',  'mean', ...  % Arithmetic average:  mean(x)
+                                                        'overwrite',        0);
+
             pulsatility_avg_data = in_bst(sFile_puls_avg);
+            pulsatility_no_gapf_avg_data = in_bst(sFile_puls_nogapf_avg);
 
             for chan_idx=cfbi_idx_chans
                 if pulsatility_avg_data.ChannelFlag(chan_idx) == 1
@@ -420,6 +433,11 @@ for iacq=1:length(acq_defs)
                         error('%s already computed for %s, duplicate condition or duplicate entry in manifest?', pi_label, subject_tag);
                     end
                     all_features(key) = pi;
+
+                    pi_no_gapf_label = protect_field_label(['Pulsatility_' tcd_chan_label suffix '_no_gapf']);
+                    key = {{subject_tag, pi_no_gapf_label}};
+                    pi_no_gapf = pulsatility_no_gapf_avg_data.F(chan_idx, 1);
+                    all_features(key) = pi_no_gapf;
                 end
             end
         end
