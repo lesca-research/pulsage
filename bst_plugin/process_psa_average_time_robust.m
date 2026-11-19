@@ -107,15 +107,20 @@ for ichan=1:nb_channels
             time_tmp = time_tmp(~m_nan);
         end
     end
+
     if sInput.ChannelFlag(ichan) ~= 1 || all(m_nan)
         A(ichan, :, :) = nan;
         continue;
     end
-
+    if sum(~m_nan) <= 10
+        warning('Not enough non-nan values (%d)', sum(~m_nan))
+        A(ichan, :, :) = nan;
+        continue;
+    end
     
     nb_samples = length(channel_data);
     
-    low = min(1, round(sProcess.options.pct_filter_range.Value{1}(1)/100 * nb_samples));
+    low = max(1, round(sProcess.options.pct_filter_range.Value{1}(1)/100 * nb_samples));
     high = max(1, round(sProcess.options.pct_filter_range.Value{1}(2)/100 * nb_samples));
     [sorted_data, sort_idx] = sort(channel_data);
     time_tmp = time_tmp(sort_idx);
