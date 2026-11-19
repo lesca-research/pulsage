@@ -337,7 +337,7 @@ for iacq=1:length(acq_defs)
                 events_tmp = db_template('event');
                 events_tmp(idiscard_evt) = discard_evt;
                 sInput_tmp.FileType = 'data';
-                sInput_tmp.FileName = sFile_cropped_discard;
+                sInput_tmp.FileName = file_nirs_aligned;
                 process_nst_import_csv_events('import_events', [], sInput_tmp, events_tmp);
             end
         end
@@ -438,10 +438,17 @@ for iacq=1:length(acq_defs)
             warning('No BP available for %s - %s', subject_name, condition)
             continue;
         end
+
+        sign_flip_item = fmt_item(visit, 'procs', 'nirs', [condition '_sign_flip']);
+        [sFile_nirs_sign_flip, redone] = nst_run_bst_proc(sign_flip_item, 0, ...
+                                                          'process_scale', sFile_nirs, [], ...
+                                                          'factor',      -1, ...
+                                                          'sensortypes', 'NIRS', ...
+                                                          'overwrite',   0);
         % TODO expose option for pct filter
         mx_item = fmt_item(visit, 'procs', 'nirs', [condition '_Mx']);
         [sFile_mx, redone] = nst_run_bst_proc(mx_item, 0, ...
-                                              'process_psa_mx2', sFile_nirs, sFile_aux, ...
+                                              'process_psa_mx2', sFile_nirs_sign_flip, sFile_aux, ...
                                               'abp_channel', BP_channel_label);
         [~, iStudy] = bst_get('AnyFile', sFile_mx);
         sChannel = bst_get('ChannelForStudy', iStudy);
