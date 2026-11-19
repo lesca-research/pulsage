@@ -121,34 +121,59 @@ for iInput=1:length(sInputs)
     signal_interp_curated = process_psa_curate_event("Compute", signal_interp', interp_time, ...
                                                      events, channels, ...
                                                      [], [], {'gap_', 'discard_'})';
-    % Fill nan segment with linear interpolation between segment boundaries
-    bound_duration = 5;
+    % Fill nan segments with linear interpolation between segment boundaries
+    signal_interp_curated_filled = fillgaps(signal_interp_curated, 3, 1);
+
+    % Extend boundaries for better spline behavior there
+    bound_duration = 2;
     interp_time_start = -bound_duration:interp_dt:(interp_time(1)-interp_dt);
     interp_time_end = (interp_time(end)+interp_dt):interp_dt:(interp_time(end)+interp_dt+bound_duration);
     interp_time_ext = [interp_time_start interp_time interp_time_end];
 
-    
     signal_interp_curated_ext = [nan(length(interp_time_start), nb_proc_channels); ...
-                                 signal_interp_curated;  ...
+                                 signal_interp_curated_filled;  ...
                                  nan(length(interp_time_end), nb_proc_channels)];
-    signal_interp_filled_ext = fillgaps(signal_interp_curated_ext, 3, 1);
+    bound_nb_samples = round(bound_duration/interp_dt);
+    signal_interp_filled_ext = fillgaps(signal_interp_curated_ext, bound_nb_samples*2, bound_nb_samples);
+
+    % figure(); hold on; plot(interp_time, signal_interp, 'k'); plot(interp_time_ext, signal_interp_filled_ext, 'g'); 
 
     % Apply spline fitting on downsampled signal filled with linear
     % interpolation in discard and gap segments
     knots_dt = sProcess.options.spline_knot_dt.Value{1};
-    knots = interp_time_ext(1):knots_dt:interp_time_ext(end);
+    
     spline_order = 3;
     % spl_mat_sl = spcol(knots, spline_order, interp_time, 'sl');
-    spl_mat = spcol(knots, spline_order, interp_time_ext, 'sparse');
-    spline_coeffs = spl_mat \ signal_interp_filled_ext;
-    signal_spline_fit_ext = spl_mat * spline_coeffs;
-
+    
+    shift_dt = 0.27;
+    nb_shifts = 10;
+    signal_spline_fits_ext = zeros(size(signal_interp_filled_ext, 1), ...
+                                   size(signal_interp_filled_ext, 2), ...
+                                   nb_shifts);
+    for ishift=1:nb_shifts
+        % sample_start = (ishift-1) * shift_samples + 1;
+        knots = (interp_time_ext(1)+(ishift-1)*shift_dt):knots_dt:interp_time_ext(end);
+        spl_mat = spcol(knots, spline_order, interp_time_ext, 'sparse');
+        spline_coeffs = spl_mat \ signal_interp_filled_ext;
+        signal_spline_fits_ext(:, :, ishift) = spl_mat * spline_coeffs;
+    end
+    signal_spline_fit_ext = mean(signal_spline_fits_ext, 3);
+    if 0
+        figure(); coi=1; hold on; plot(sDataIn.Time, signal(:,coi)', 'k');
+        nColors = 256;       % Number of colors in the colormap
+        col_map = autumn(nb_shifts);
+        for ishift=1:nb_shifts
+            plot(interp_time_ext, signal_spline_fits_ext(:, coi, ishift)', ...
+                 'Color', col_map(ishift, :));
+            plot(interp_time_ext, signal_spline_fit_ext(:, coi)', 'b', 'LineWidth', 1.25);
+        end
+    end
     signal_spline_fit = signal_spline_fit_ext(length(interp_time_start)+1:length(signal_interp_curated_ext)-length(interp_time_end), :);
 
     % Oversample to go back to original time axis
     signal_spline_fit_oversampled = interp1(interp_time', signal_spline_fit, sDataIn.Time', 'linear');
 
-    % figure(); coi=2; hold on; plot(sDataIn.Time, signal(:,coi)', 'k'); plot(interp_time, signal_interp_curated(:,coi)', 'b'); plot(interp_time, signal_spline_fit(:, coi)', 'r'); plot(sDataIn.Time, signal_spline_fit_oversampled(:, coi)', 'g');
+    % figure(); coi=1; hold on; plot(sDataIn.Time, signal(:,coi)', 'k'); plot(interp_time, signal_interp_curated(:,coi)', 'b'); plot(interp_time_ext, signal_spline_fit_ext(:, coi)', 'r'); plot(sDataIn.Time, signal_spline_fit_oversampled(:, coi)', 'g');
 
     assert(all(all(~isnan(signal_spline_fit_oversampled))));
 
