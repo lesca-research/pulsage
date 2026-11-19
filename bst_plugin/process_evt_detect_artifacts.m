@@ -231,7 +231,8 @@ function artifact_time = ecg_artifact_detection(ecg, time)
 
     % ---- 2) Time-frequency broadband-energy detection --------------------
     try
-        [wt, f] = cwt(ecg, 'amor', fs);
+        [wt, f] = cwt(ecg, 'amor', fs,  ...
+                     'FrequencyLimits', [qrsBandHz(1)/10 qrsBandHz(1)*10] );
     catch ME
         error('ecg_artifact_detection:cwtFailed', ...
             ['CWT computation failed (requires Wavelet Toolbox). ' ...
