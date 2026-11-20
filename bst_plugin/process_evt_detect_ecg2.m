@@ -98,13 +98,26 @@ function OutputFiles = detect_event(sProcess, sInputs) %#ok<DEFNU>
     end
     % Ignore bad segments? (not in the options: always enforced)
     isIgnoreBad = 1;
+
+    option_sets = struct([]);
+    % Typical R-peak detection
+    option_sets(end+1).threshold.Value = {3, 'x std', 2};
+    option_sets(end).bandpass.Value  = {[10 40], 'Hz', 2};
+    option_sets(end).blanking.Value  = {0.3, 'ms', []};
+    option_sets(end).isnoisecheck.Value = 1;
+    option_sets(end).isclassify.Value   = 1;
+    option_sets(end).label = 'peak';
+
+    % R-peak detection adapted to wider peaks (for pace makers)
+    option_sets(end+1).threshold.Value = {2, 'x std', 2};
+    option_sets(end).bandpass.Value  = {[1.5 15], 'Hz', 2};
+    option_sets(end).blanking.Value  = {0.8, 'ms', []};
+    option_sets(end).isnoisecheck.Value = 1;
+    option_sets(end).isclassify.Value   = 1;
+    option_sets(end).label = 'blink';
+
     % Prepare options structure for the detection function
     OPTIONS = Compute();
-    OPTIONS.threshold    = sProcess.options.threshold.Value{1};
-    OPTIONS.bandpass     = sProcess.options.bandpass.Value{1};
-    OPTIONS.blanking     = sProcess.options.blanking.Value{1};
-    OPTIONS.isnoisecheck = sProcess.options.isnoisecheck.Value;
-    OPTIONS.isclassify   = sProcess.options.isclassify.Value;
     if isfield(sProcess.options,'maxcross')
         OPTIONS.maxcross   = sProcess.options.maxcross.Value;
     end
@@ -217,25 +230,48 @@ function OutputFiles = detect_event(sProcess, sInputs) %#ok<DEFNU>
         bst_progress('set', progressPos + round(2 * iFile / length(sInputs) / 3 * 100));
         
         detectedEvt = {};
+        detectedEvt_names = {};
+        min_pace_std = inf;
         for idx_chan=size(F, 1)
-            % Perform detection
-            peak_events = Compute(F(idx_chan, :), TimeVector, OPTIONS, Fmask);
-            if ~isempty(peak_events)
-                % Detect artifacts
-                artifact_events = process_evt_detect_artifacts("Compute", F(idx_chan, :), TimeVector, 'ECG');
-                artifact_events = [];
-                for i_events=1:length(peak_events)
-                    if ~isempty(artifact_events)
-                        % Filter peak times that are within artifactuel segments
-                        filtered_peaks_events = filter_events_within(peak_events{i_events}, artifact_events);
-                        if ~isempty(filtered_peaks_events)
-                            detectedEvt{end+1} = filtered_peaks_events;
+            for i_option=1:length(option_sets)
+                OPTIONS.threshold    = option_sets(i_option).threshold.Value{1};
+                OPTIONS.bandpass     = option_sets(i_option).bandpass.Value{1};
+                OPTIONS.blanking     = option_sets(i_option).blanking.Value{1};
+                OPTIONS.isnoisecheck = option_sets(i_option).isnoisecheck.Value;
+                OPTIONS.isclassify   = option_sets(i_option).isclassify.Value;
+                % Perform detection
+                peak_events = Compute(F(idx_chan, :), TimeVector, OPTIONS, Fmask);
+                if ~isempty(peak_events)
+                    % Detect artifacts
+                    artifact_events = process_evt_detect_artifacts("Compute", F(idx_chan, :), TimeVector, 'ECG');
+                    artifact_events = [];
+                    for i_event=1:length(peak_events)
+                        if ~isempty(artifact_events)
+                            % Filter peak times that are within artifactual segments
+                            peak_events{i_event} = filter_events_within(peak_events{i_event}, artifact_events);
                         end
-                    else
-                        detectedEvt{end+1} = peak_events{i_events};
+                        detectedEvt{end+1} = peak_events{i_event};
+                        evt_name_prefix = [evtName '_' option_sets(i_option).label];
+                        if i_event == 1
+                            detectedEvt_names{end+1} = evt_name_prefix;
+                        else
+                            detectedEvt_names{end+1} = sprintf('%s_%d', evt_name_prefix, i_event-1);
+                        end
                     end
                 end
+
+                % Check peak dispersion
+                pace_std = std(diff([peak_events{:}]));
+                if pace_std < min_pace_std
+                    selected_peak_events = peak_events;
+                    min_pace_std = pace_std;
+                end
             end
+
+            % for i_events=1:length(selected_peak_events)
+            %     detectedEvt{end+1} = selected_peak_events;
+            %     detectedEvt_names{end+1} = 
+            % end
         end
         
         % ===== CREATE EVENTS =====
@@ -247,11 +283,8 @@ function OutputFiles = detect_event(sProcess, sInputs) %#ok<DEFNU>
         % Process each event type separately
         for i = 1:length(detectedEvt)
             % Event name
-            if (i > 1)
-                newName = sprintf('%s%d', evtName, i);
-            else
-                newName = evtName;
-            end
+            newName = detectedEvt_names{i};
+
             % Get the event to create
             iEvt = find(strcmpi({sFile.events.label}, newName));
             % Existing event: reset it
